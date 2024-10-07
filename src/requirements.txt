@@ -1,0 +1,4 @@
+pycti==6.3.3
+assemblyline-client==4.2.0
+PyYAML==6.0
+requests==2.32.2

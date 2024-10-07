@@ -1,0 +1,20 @@
+version: '3'  # Version de Docker Compose
+
+services:
+  connector-assemblyline:
+    build: .  # Indique que l'image doit être construite à partir du Dockerfile dans le répertoire actuel
+    environment:
+      - OPENCTI_URL=https://your-opencti-instance-url.com  # URL de l'instance OpenCTI
+      - OPENCTI_TOKEN=${OPENCTI_TOKEN}  # Clé d'API OpenCTI, définie par l'environnement
+      - ASSEMBLYLINE_URL=https://assemblyline.example.com  # URL de l'instance Assemblyline
+      - ASSEMBLYLINE_API_KEY=${ASSEMBLYLINE_API_KEY}  # Clé d'API Assemblyline, définie par l'environnement
+      - ASSEMBLYLINE_POLLING_INTERVAL=600  # Intervalle de polling par défaut en secondes
+    networks:
+      - opencti-network  # Réseau utilisé pour la communication entre les services
+    restart: always  # Redémarre le conteneur automatiquement en cas de plantage
+    volumes:
+      - ./logs:/app/logs  # Volume pour stocker les logs, si nécessaire
+
+networks:
+  opencti-network:  # Définition du réseau
+    driver: bridge  # Utilisation du pilote de réseau bridge

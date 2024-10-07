@@ -1,0 +1,17 @@
+opencti:
+  url: "https://opencti.example.com"  # L'URL de l'instance OpenCTI
+  token: "YOUR_OPENCTI_API_KEY"  # Considérer l'utilisation de variables d'environnement pour la sécurité
+
+connector:
+  id: "assemblyline-connector"  # Identifiant unique pour le connecteur
+  name: "Assemblyline Connector"  # Nom du connecteur
+  scope: "file"  # Domaine d'application du connecteur
+  confidence_level: 50  # Niveau de confiance par défaut
+  log_level: "info"  # Niveau de journalisation (debug, info, warning, error)
+
+assemblyline:
+  url: "https://assemblyline.example.com"  # L'URL de l'instance Assemblyline
+  api_key: "YOUR_ASSEMBLYLINE_API_KEY"  # Considérer l'utilisation de variables d'environnement pour la sécurité
+  polling_interval: 600  # Intervalle de polling en secondes (par exemple, 10 minutes)
+  submission_filters: []  # Filtres optionnels pour les soumissions si nécessaire
+  max_retries: 3  # Nombre maximum de tentatives pour les appels API
