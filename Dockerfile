@@ -1,25 +1,21 @@
 FROM python:3.11-alpine
 
-# Métadonnées
-LABEL maintainer="Your Name <your.email@example.com>"
-
-# Configuration du répertoire de travail
+# Set working directory
 WORKDIR /opt/opencti-connector-assemblyline
 
-# Installation des dépendances système
-RUN apk --no-cache add git build-base libmagic libffi-dev
-
-# Copie des fichiers requirements
+# Copy requirements first for better caching
 COPY requirements.txt .
 
-# Installation des dépendances Python
-RUN pip3 install --no-cache-dir -r requirements.txt
+# Install dependencies
+RUN apk add --no-cache \
+    git \
+    libffi-dev \
+    libmagic \
+    && pip install --no-cache-dir -r requirements.txt \
+    && apk del git
 
-# Copie du code du connecteur
-COPY src/ .
+# Copy source code
+COPY src/ ./
 
-# Exposition des variables d'environnement
-ENV PYTHONUNBUFFERED=1
-
-# Point d'entrée
-ENTRYPOINT ["python3", "assemblyline.py"]
+# Set entrypoint
+ENTRYPOINT ["python", "main.py"]

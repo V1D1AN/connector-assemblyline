@@ -1,490 +1,371 @@
-# OpenCTI AssemblyLine Analysis Connector - Documentation Complète
+# OpenCTI AssemblyLine Connector
 
-## 📋 Table des Matières
+![OpenCTI](https://img.shields.io/badge/OpenCTI-6.x-blue)
+![AssemblyLine](https://img.shields.io/badge/AssemblyLine-4.x-green)
+![Python](https://img.shields.io/badge/Python-3.10+-yellow)
+![License](https://img.shields.io/badge/License-Apache%202.0-red)
 
-- [Vue d'ensemble](#vue-densemble)
-- [Architecture](#architecture)
-- [Installation et Configuration](#installation-et-configuration)
-- [Fonctionnalités](#fonctionnalités)
-- [Paramètres de Configuration](#paramètres-de-configuration)
-- [Workflow d'Analyse](#workflow-danalyse)
-- [Types d'Objets Créés](#types-dobjets-créés)
-- [Logs et Monitoring](#logs-et-monitoring)
-- [Dépannage](#dépannage)
-- [Limitations](#limitations)
-- [FAQ](#faq)
+An **internal enrichment connector** for [OpenCTI](https://github.com/OpenCTI-Platform/opencti) that integrates with [AssemblyLine](https://cybercentrecanada.github.io/assemblyline4_docs/) malware analysis platform.
 
-## 🎯 Vue d'ensemble
+This connector automatically submits files (Artifacts and StixFiles) to AssemblyLine for analysis and enriches OpenCTI with the results, including malicious IOCs, MITRE ATT&CK techniques, and malware family attributions.
 
-Le connecteur d'analyse AssemblyLine pour OpenCTI permet l'enrichissement automatique des artefacts de fichiers en soumettant ces fichiers à une plateforme AssemblyLine pour analyse malware. Il extrait automatiquement les IOCs malveillants, les familles de malware et les techniques MITRE ATT&CK pour créer des indicateurs de menace dans OpenCTI.
+## 📋 Table of Contents
 
-### Caractéristiques Principales
+- [Features](#-features)
+- [Requirements](#-requirements)
+- [Installation](#-installation)
+  - [Docker (Recommended)](#docker-recommended)
+  - [Manual Installation](#manual-installation)
+- [Configuration](#-configuration)
+- [Usage](#-usage)
+- [Created Objects](#-created-objects)
+- [Screenshots](#-screenshots)
+- [Troubleshooting](#-troubleshooting)
+- [Contributing](#-contributing)
+- [License](#-license)
 
-- **Analyse automatique** des fichiers uploadés dans OpenCTI
-- **Extraction d'IOCs** (domaines, IPs, URLs malveillants)
-- **Détection de familles malware** (NJRAT, XENORAT, etc.)
-- **Mapping MITRE ATT&CK** (techniques d'attaque observées)
-- **Support des IOCs suspects** (optionnel)
-- **Contrôle de taille de fichier** (limite configurable)
-- **Système de retry automatique** pour les uploads en cours
-- **Réutilisation d'analyses existantes** (évite les duplications)
+## ✨ Features
 
-## 🏗️ Architecture
+### Core Features
 
+- **Automatic File Submission**: Submits Artifacts and StixFiles to AssemblyLine for analysis
+- **Intelligent Caching**: Reuses existing AssemblyLine analysis results to avoid redundant submissions
+- **Retry Mechanism**: Automatic retry for files still being uploaded to OpenCTI
+
+### Enrichment Capabilities
+
+- **Malicious IOC Extraction**: Extracts domains, IPs, URLs marked as malicious
+- **Indicator Creation**: Creates STIX Indicators with proper patterns
+- **Observable Creation**: Creates corresponding Observables linked to Indicators via "based-on" relationships
+- **Malware Family Detection**: Identifies and creates Malware objects for detected families
+- **MITRE ATT&CK Mapping**: Extracts and creates Attack Pattern objects from AssemblyLine's attack matrix
+
+### Advanced Features
+
+- **Malware Analysis SDO**: Creates STIX 2.1 Malware Analysis objects (visible in OpenCTI's "Malware Analysis" section)
+- **Author Attribution**: All created objects are attributed to "AssemblyLine" identity
+- **Suspicious IOC Support**: Optional inclusion of suspicious (not just malicious) IOCs
+- **Configurable File Size Limit**: Prevents submission of files exceeding a specified size
+
+## 📦 Requirements
+
+- **OpenCTI Platform**: Version 6.x or higher
+- **AssemblyLine**: Version 4.x with API access
+- **Python**: 3.10 or higher
+- **Docker**: (recommended for deployment)
+
+## 🚀 Installation
+
+### Docker (Recommended)
+
+1. **Clone the repository**:
+
+```bash
+git clone https://github.com/yourusername/opencti-assemblyline-connector.git
+cd opencti-assemblyline-connector
 ```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   OpenCTI       │    │  Connecteur      │    │  AssemblyLine   │
-│                 │    │  AssemblyLine    │    │  Platform       │
-│ ┌─────────────┐ │    │                  │    │                 │
-│ │  Artifact   │ │───▶│ ┌──────────────┐ │───▶│ ┌─────────────┐ │
-│ │ (nouveau)   │ │    │ │ Traitement   │ │    │ │  Analyse    │ │
-│ └─────────────┘ │    │ │ Automatique  │ │    │ │  Malware    │ │
-│                 │    │ └──────────────┘ │    │ └─────────────┘ │
-│ ┌─────────────┐ │◀───│ ┌──────────────┐ │◀───│ ┌─────────────┐ │
-│ │ Indicators  │ │    │ │ Création     │ │    │ │ Résultats   │ │
-│ │ AttackPatt. │ │    │ │ Objets CTI   │ │    │ │ + IOCs      │ │
-│ │ Observables │ │    │ │              │ │    │ │ + ATT&CK    │ │
-│ └─────────────┘ │    │ └──────────────┘ │    │ └─────────────┘ │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
+
+2. **Configure environment variables** (see [Configuration](#-configuration))
+
+3. **Build and run with Docker Compose**:
+
+```bash
+docker-compose up -d
 ```
 
-## 🚀 Installation et Configuration
+### Manual Installation
 
-### Prérequis
+1. **Clone the repository**:
 
-- OpenCTI 5.x ou supérieur
-- Accès à une instance AssemblyLine
-- Docker et Docker Compose
-- Clé API AssemblyLine valide
+```bash
+git clone https://github.com/yourusername/opencti-assemblyline-connector.git
+cd opencti-assemblyline-connector
+```
 
-### Configuration Docker Compose
+2. **Create virtual environment**:
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+3. **Install dependencies**:
+
+```bash
+pip install -r requirements.txt
+```
+
+4. **Configure the connector** (copy and edit config file):
+
+```bash
+cp src/config.yml.sample src/config.yml
+# Edit src/config.yml with your settings
+```
+
+5. **Run the connector**:
+
+```bash
+cd src
+python main.py
+```
+
+## ⚙️ Configuration
+
+### Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `OPENCTI_URL` | ✅ | - | OpenCTI platform URL |
+| `OPENCTI_TOKEN` | ✅ | - | OpenCTI API token |
+| `CONNECTOR_ID` | ✅ | - | Unique connector identifier (UUIDv4) |
+| `CONNECTOR_NAME` | ❌ | `AssemblyLine` | Connector name displayed in OpenCTI |
+| `CONNECTOR_SCOPE` | ❌ | `Artifact,StixFile` | Observable types to process |
+| `CONNECTOR_AUTO` | ❌ | `true` | Enable automatic enrichment |
+| `CONNECTOR_CONFIDENCE_LEVEL` | ❌ | `80` | Default confidence level (0-100) |
+| `CONNECTOR_LOG_LEVEL` | ❌ | `info` | Log level (debug, info, warning, error) |
+| `ASSEMBLYLINE_URL` | ✅ | - | AssemblyLine instance URL |
+| `ASSEMBLYLINE_USER` | ✅ | - | AssemblyLine username |
+| `ASSEMBLYLINE_APIKEY` | ✅ | - | AssemblyLine API key |
+| `ASSEMBLYLINE_VERIFY_SSL` | ❌ | `true` | Verify SSL certificates |
+| `ASSEMBLYLINE_SUBMISSION_PROFILE` | ❌ | `static_with_dynamic` | AssemblyLine submission profile |
+| `ASSEMBLYLINE_TIMEOUT` | ❌ | `600` | Analysis timeout in seconds |
+| `ASSEMBLYLINE_FORCE_RESUBMIT` | ❌ | `false` | Force resubmission even if already analyzed |
+| `ASSEMBLYLINE_MAX_FILE_SIZE_MB` | ❌ | `1` | Maximum file size to submit (MB) |
+| `ASSEMBLYLINE_INCLUDE_SUSPICIOUS` | ❌ | `false` | Include suspicious IOCs (not just malicious) |
+| `ASSEMBLYLINE_CREATE_ATTACK_PATTERNS` | ❌ | `true` | Create MITRE ATT&CK patterns |
+| `ASSEMBLYLINE_CREATE_MALWARE_ANALYSIS` | ❌ | `true` | Create Malware Analysis SDO |
+| `ASSEMBLYLINE_CREATE_OBSERVABLES` | ❌ | `true` | Create Observables from Indicators |
+
+### Configuration File (config.yml)
 
 ```yaml
-services:
-  connector-assemblyline:
-    image: assemblyline-connector:latest
-    container_name: connector-assemblyline
-    environment:
-      # ===========================
-      # OpenCTI Configuration
-      # ===========================
-      - OPENCTI_URL=http://opencti:8080
-      - OPENCTI_TOKEN=your-opencti-token
-      
-      # ===========================
-      # Connector Configuration
-      # ===========================
-      - CONNECTOR_ID=your-uuid-v4-here
-      - CONNECTOR_TYPE=INTERNAL_ENRICHMENT
-      - CONNECTOR_NAME=AssemblyLine
-      - CONNECTOR_SCOPE=Artifact
-      - CONNECTOR_AUTO=true
-      - CONNECTOR_CONFIDENCE_LEVEL=85
-      - CONNECTOR_LOG_LEVEL=info
-      
-      # ===========================
-      # AssemblyLine Configuration
-      # ===========================
-      - ASSEMBLYLINE_URL=https://your-assemblyline-instance.com
-      - ASSEMBLYLINE_USER=your-username
-      - ASSEMBLYLINE_APIKEY=your-api-key
-      - ASSEMBLYLINE_VERIFY_SSL=true
-      - ASSEMBLYLINE_SUBMISSION_PROFILE=default
-      - ASSEMBLYLINE_TIMEOUT=600
-      - ASSEMBLYLINE_FORCE_RESUBMIT=false
-      - ASSEMBLYLINE_MAX_FILE_SIZE_MB=10
-      - ASSEMBLYLINE_INCLUDE_SUSPICIOUS=false
-      - ASSEMBLYLINE_CREATE_ATTACK_PATTERNS=true
-      
-    restart: unless-stopped
-    depends_on:
-      - opencti
-```
-
-### Configuration Alternative (config.yml)
-
-```yaml
-# config.yml
 opencti:
-  url: 'http://opencti:8080'
-  token: 'your-opencti-token'
+  url: 'http://localhost:8080'
+  token: 'ChangeMe'
 
 connector:
-  id: 'your-uuid-v4-here'
+  id: 'ChangeMe'
   type: 'INTERNAL_ENRICHMENT'
   name: 'AssemblyLine'
-  scope: 'Artifact'
+  scope: 'Artifact,StixFile'
   auto: true
-  confidence_level: 85
+  confidence_level: 80
   log_level: 'info'
 
 assemblyline:
-  url: 'https://your-assemblyline-instance.com'
-  user: 'your-username'
-  apikey: 'your-api-key'
+  url: 'https://assemblyline.example.com'
+  user: 'admin'
+  apikey: 'ChangeMe'
   verify_ssl: true
-  submission_profile: 'default'
+  submission_profile: 'static_with_dynamic'
   timeout: 600
   force_resubmit: false
-  max_file_size_mb: 10
+  max_file_size_mb: 1
   include_suspicious: false
   create_attack_patterns: true
+  create_malware_analysis: true
+  create_observables: true
 ```
 
-## ⚙️ Paramètres de Configuration
+## 📖 Usage
 
-### Paramètres AssemblyLine
+### Automatic Enrichment
 
-| Paramètre | Description | Valeur par défaut | Obligatoire |
-|-----------|-------------|-------------------|-------------|
-| `ASSEMBLYLINE_URL` | URL de l'instance AssemblyLine | - | ✅ |
-| `ASSEMBLYLINE_USER` | Nom d'utilisateur AssemblyLine | - | ✅ |
-| `ASSEMBLYLINE_APIKEY` | Clé API AssemblyLine | - | ✅ |
-| `ASSEMBLYLINE_VERIFY_SSL` | Vérification SSL | `true` | ❌ |
-| `ASSEMBLYLINE_SUBMISSION_PROFILE` | Profil d'analyse | `default` | ❌ |
-| `ASSEMBLYLINE_TIMEOUT` | Timeout en secondes | `600` | ❌ |
-| `ASSEMBLYLINE_FORCE_RESUBMIT` | Forcer nouvelle analyse | `false` | ❌ |
+When `CONNECTOR_AUTO=true`, the connector automatically processes any new Artifact or StixFile created in OpenCTI.
 
-### Paramètres de Filtrage
+### Manual Enrichment
 
-| Paramètre | Description | Valeur par défaut | Exemples |
-|-----------|-------------|-------------------|----------|
-| `ASSEMBLYLINE_MAX_FILE_SIZE_MB` | Taille max en MB | `10` | `1`, `50`, `100` |
-| `ASSEMBLYLINE_INCLUDE_SUSPICIOUS` | Inclure IOCs suspects | `false` | `true`, `false` |
-| `ASSEMBLYLINE_CREATE_ATTACK_PATTERNS` | Créer patterns ATT&CK | `true` | `true`, `false` |
+1. Navigate to an **Artifact** or **StixFile** in OpenCTI
+2. Click the **"Enrichment"** button
+3. Select **"AssemblyLine"** from the list
+4. Wait for the analysis to complete
 
-### Paramètres OpenCTI
-
-| Paramètre | Description | Valeur par défaut |
-|-----------|-------------|-------------------|
-| `CONNECTOR_AUTO` | Mode automatique | `true` |
-| `CONNECTOR_SCOPE` | Portée du connecteur | `Artifact` |
-| `CONNECTOR_CONFIDENCE_LEVEL` | Niveau de confiance | `85` |
-
-## 🔄 Workflow d'Analyse
-
-### 1. Déclenchement
+### Workflow
 
 ```mermaid
-graph TD
-    A[Artifact uploadé dans OpenCTI] --> B{Mode automatique?}
-    B -->|Oui| C[Connecteur déclenché]
-    B -->|Non| D[Déclenchement manuel]
-    C --> E[Extraction contenu fichier]
-    D --> E
-```
-
-### 2. Traitement du Fichier
-
-```mermaid
-graph TD
-    A[Extraction contenu fichier] --> B{Taille < limite?}
-    B -->|Non| C[Erreur: fichier trop volumineux]
-    B -->|Oui| D[Calcul hash SHA-256]
-    D --> E{Analyse existante?}
-    E -->|Oui + !force_resubmit| F[Réutilisation résultats]
-    E -->|Non ou force_resubmit| G[Soumission à AssemblyLine]
-    F --> H[Extraction IOCs]
-    G --> I[Attente résultats]
-    I --> H
-```
-
-### 3. Extraction et Création d'Objets
-
-```mermaid
-graph TD
-    A[Résultats AssemblyLine] --> B[Extraction IOCs malveillants]
-    A --> C[Extraction familles malware]
-    A --> D[Extraction techniques ATT&CK]
-    B --> E[Création indicateurs]
-    C --> F[Création entités malware]
-    D --> G[Création attack patterns]
-    E --> H[Liaison à l'artifact]
+graph LR
+    A[File uploaded to OpenCTI] --> B{Auto enrichment?}
+    B -->|Yes| C[Submit to AssemblyLine]
+    B -->|No| D[Manual trigger]
+    D --> C
+    C --> E{Already analyzed?}
+    E -->|Yes| F[Reuse results]
+    E -->|No| G[Wait for analysis]
+    G --> H[Get results]
     F --> H
-    G --> H
-    H --> I[Création note récapitulative]
+    H --> I[Create Indicators]
+    I --> J[Create Observables]
+    J --> K[Create Attack Patterns]
+    K --> L[Create Malware Analysis]
+    L --> M[Create Note]
 ```
 
-### 4. Système de Retry
+## 📊 Created Objects
 
-Le connecteur implémente un système de retry automatique pour gérer les uploads en cours :
+The connector creates the following objects in OpenCTI:
 
-- **Tentative 1** : Immédiate
-- **Tentative 2** : Après 5 secondes + rafraîchissement données
-- **Tentative 3** : Après 10 secondes + rafraîchissement données
-- **Tentative 4** : Après 15 secondes + rafraîchissement données
+### Indicators
 
-## 📦 Types d'Objets Créés
+For each malicious IOC (domain, IP, URL), an Indicator is created with:
+- STIX pattern (e.g., `[domain-name:value = 'malware.com']`)
+- Score: 80/100
+- Labels: `malicious`, `assemblyline`
+- Author: AssemblyLine
 
-### 1. Indicateurs (Indicators)
+### Observables
 
-**IOCs Malveilleux :**
-- **Domaines malveilleux** : Pattern STIX `[domain-name:value = 'evil.com']`
-- **Adresses IP malveilleus** : Pattern STIX `[ipv4-addr:value = '1.2.3.4']`
-- **URLs malveilleux** : Pattern STIX `[url:value = 'http://evil.com/payload']`
+When `ASSEMBLYLINE_CREATE_OBSERVABLES=true`, corresponding Observables are created:
+- Domain-Name
+- IPv4-Addr / IPv6-Addr
+- URL
 
-**Propriétés :**
-- Score de confiance : 80-85
-- Labels : `["malicious", "assemblyline"]`
-- Références externes vers AssemblyLine
+Each Observable is linked to its Indicator via a **"based-on"** relationship.
 
-### 2. Observables
+### Malware Objects
 
-**Cyber Observables créés :**
-- **Domain-Name** pour les domaines
-- **IPv4-Addr** pour les adresses IP  
-- **Url** pour les URLs
+For detected malware families:
+- Name: Family name (e.g., "EMOTET", "TRICKBOT")
+- Type: Family
+- Relationship: "related-to" with the analyzed file
 
-**Relations :**
-- `Artifact` --[related-to]--> `Observable`
-- `Indicator` --[based-on]--> `Observable`
+### Attack Patterns
 
-### 3. Entités Malware
+MITRE ATT&CK techniques extracted from AssemblyLine:
+- Name: `T1059.001 - PowerShell`
+- External reference to MITRE ATT&CK
+- Kill chain phases
+- Relationship: "uses" with the analyzed file
 
-**Familles de malware détectées :**
-- Nom basé sur détection AssemblyLine (NJRAT, XENORAT, etc.)
-- Labels : `["trojan"]` (par défaut)
-- Propriété `is_family: true`
+### Malware Analysis SDO
 
-### 4. Attack Patterns (MITRE ATT&CK)
+A STIX 2.1 Malware Analysis object containing:
+- Product: AssemblyLine
+- Result: malicious/suspicious/benign/unknown
+- Analysis timestamps
+- Link to AssemblyLine submission
+- References to extracted IOCs
 
-**Techniques d'attaque :**
-- Format : `T1027 - Obfuscated Files or Information`
-- Kill Chain Phases MITRE ATT&CK
-- Références externes vers MITRE
-- Labels incluant la tactique et la confiance
+### Note
 
-**Relations :**
-- `Artifact` --[uses]--> `Attack-Pattern`
+A summary note attached to the analyzed file with:
+- Verdict (MALICIOUS/SAFE)
+- Score
+- IOC counts
+- File information
+- Link to AssemblyLine
 
-### 5. Note Récapitulative
+## 📸 Screenshots
 
-```markdown
-# AssemblyLine Analysis Results
+### Enrichment Results
 
-**Verdict:** MALICIOUS/SAFE
-**Score:** 1500/2000
-**Submission ID:** AL_submission_12345
+![Enrichment Note](docs/images/enrichment-note.png)
 
-## Malicious IOCs Created as Indicators
-- **Malicious Domains:** 3
-- **Malicious IP Addresses:** 2
-- **Malicious URLs:** 1
-- **Malware Families:** 2
+### Malware Analysis Section
 
-## MITRE ATT&CK Analysis
-- **Attack Techniques Identified:** 8
+![Malware Analysis](docs/images/malware-analysis.png)
 
-## File Information
-- **SHA256:** abc123def456...
-- **Type:** application/vnd.microsoft.portable-executable
-- **Size:** 1,234,567 bytes (1.2 MB)
+### Relationships Graph
 
-View full results in AssemblyLine: https://assemblyline.com/submission/12345
-```
+![Relationships](docs/images/relationships.png)
 
-## 📊 Logs et Monitoring
+## 🔧 Troubleshooting
 
-### Logs de Démarrage
+### Common Issues
 
-```
-INFO - AssemblyLine submission profile: default
-INFO - AssemblyLine timeout: 600s
-INFO - AssemblyLine force resubmit: False
-INFO - AssemblyLine max file size: 10.0 MB
-INFO - AssemblyLine include suspicious: False
-INFO - AssemblyLine create attack patterns: True
-INFO - Starting AssemblyLine connector...
-```
+#### "Artifact has no file content for analysis"
 
-### Logs de Traitement
+**Cause**: The file is still being uploaded to OpenCTI or only contains hashes.
 
-```
-INFO - Processing observable: Artifact - 12345678-1234-1234-1234-123456789abc
-INFO - Retrieving file content (attempt 1/3)
-INFO - File content found in importFiles
-INFO - Processing file: malware.exe (1.2 MB, SHA-256: abc123...)
-INFO - No existing analysis found, new submission required
-INFO - Submitting file to AssemblyLine: malware.exe (1234567 bytes)
-INFO - File submitted successfully: AL_submission_12345
-INFO - Polling for results... (max wait: 600s)
-INFO - Analysis completed with score: 1500/2000
-INFO - Extracting IOCs from tags (including: malicious)...
-INFO - Found malicious IOC: evil-c2.com (type: network.static.domain)
-INFO - Found malicious IOC: 1.2.3.4 (type: network.dynamic.ip)
-INFO - Extracted IOCs (malicious) - Domains: 3, IPs: 2, URLs: 1, Families: 2
-INFO - Extracting MITRE ATT&CK techniques from attack_matrix...
-INFO - Processing tactic: defense-evasion
-INFO - Extracted ATT&CK technique: T1027 (Obfuscated Files or Information) - Tactic: defense-evasion
-INFO - Extracted 8 ATT&CK techniques across 4 tactics
-INFO - Created 8 attack patterns and linked them to the file
-INFO - Created indicator for malicious domain: evil-c2.com
-INFO - Created indicator for malicious IP: 1.2.3.4
-INFO - File successfully analyzed by AssemblyLine and malicious indicators created
-```
+**Solution**: 
+- Wait for the upload to complete
+- If using hash-only artifacts, ensure AssemblyLine has previously analyzed this file
 
-### Logs d'Erreur Courants
+#### "File size exceeds maximum limit"
 
-```
-ERROR - File size (15.2 MB) exceeds maximum limit (10.0 MB)
-ERROR - Artifact has no file content for analysis after waiting
-ERROR - AssemblyLine submission failed: HTTP 401 Unauthorized
-ERROR - Analysis timeout after 600 seconds
-ERROR - Could not create indicator for domain evil.com: Duplicate object
-WARNING - Found suspicious IOC: sketchy-site.net (type: network.dynamic.domain)
-WARNING - Could not create attack pattern T1055: Object already exists
-```
+**Cause**: The file is larger than `ASSEMBLYLINE_MAX_FILE_SIZE_MB`.
 
-## 🔧 Dépannage
+**Solution**: Increase the limit in configuration or exclude large files from enrichment.
 
-### Problèmes Courants
+#### "Timeout waiting for AssemblyLine results"
 
-#### 1. "Artifact has no file content"
+**Cause**: Analysis is taking longer than `ASSEMBLYLINE_TIMEOUT`.
 
-**Causes :**
-- Fichier encore en cours d'upload
-- Artifact ne contient que des hashes
-- Problème de permissions fichier
+**Solution**: 
+- Increase the timeout value
+- Check AssemblyLine queue status
+- Verify AssemblyLine services are running
 
-**Solutions :**
-- Attendre la fin de l'upload
-- Activer `force_resubmit` pour forcer une nouvelle tentative
-- Vérifier les permissions sur les fichiers importés
+#### SSL Certificate Errors
 
-#### 2. "File size exceeds maximum limit"
+**Cause**: Self-signed or invalid SSL certificate on AssemblyLine.
 
-**Cause :** Fichier trop volumineux selon la limite configurée
+**Solution**: Set `ASSEMBLYLINE_VERIFY_SSL=false` (not recommended for production).
 
-**Solution :** Augmenter `ASSEMBLYLINE_MAX_FILE_SIZE_MB` ou analyser des fichiers plus petits
+### Debug Mode
 
-#### 3. "AssemblyLine submission failed: HTTP 401"
-
-**Causes :**
-- Clé API invalide
-- Utilisateur sans permissions
-- Instance AssemblyLine inaccessible
-
-**Solutions :**
-- Vérifier `ASSEMBLYLINE_APIKEY`
-- Vérifier les permissions utilisateur
-- Tester la connectivité : `curl -H "Authorization: Bearer $API_KEY" $ASSEMBLYLINE_URL/api/v4/user/whoami/`
-
-#### 4. "Analysis timeout after 600 seconds"
-
-**Causes :**
-- Fichier complexe nécessitant plus de temps
-- AssemblyLine surchargé
-- Problème réseau
-
-**Solutions :**
-- Augmenter `ASSEMBLYLINE_TIMEOUT`
-- Réessayer plus tard
-- Vérifier la charge AssemblyLine
-
-### Debugging
-
-#### Mode Debug
+Enable debug logging for more detailed output:
 
 ```yaml
-environment:
-  - CONNECTOR_LOG_LEVEL=debug
+connector:
+  log_level: 'debug'
 ```
 
-#### Vérification de la Configuration
+### Logs
+
+View connector logs:
 
 ```bash
-# Vérifier les logs de démarrage
-docker logs connector-assemblyline | grep "AssemblyLine.*:"
+# Docker
+docker logs -f opencti-assemblyline-connector
 
-# Tester la connexion AssemblyLine
-docker exec connector-assemblyline curl -H "Authorization: Bearer $API_KEY" $ASSEMBLYLINE_URL/api/v4/user/whoami/
+# Manual
+tail -f /var/log/opencti/assemblyline-connector.log
 ```
 
-#### Forcer une Nouvelle Analyse
+## 🤝 Contributing
 
-```yaml
-environment:
-  - ASSEMBLYLINE_FORCE_RESUBMIT=true
+Contributions are welcome! Please follow these steps:
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+### Development Setup
+
+```bash
+# Clone your fork
+git clone https://github.com/yourusername/opencti-assemblyline-connector.git
+cd opencti-assemblyline-connector
+
+# Create virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# Install dev dependencies
+pip install -r requirements-dev.txt
+
+# Run tests
+pytest tests/
 ```
 
-## ⚠️ Limitations
+## 📄 License
 
-### Limitations Techniques
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
 
-1. **Types de fichiers supportés** : Uniquement les artifacts avec contenu binaire
-2. **Taille de fichier** : Limitée par la configuration (défaut: 10MB)
-3. **Timeout** : Analyses longues peuvent expirer (défaut: 600s)
-4. **Rate limiting** : Dépend des limites AssemblyLine
+## 🙏 Acknowledgments
 
-### Limitations Fonctionnelles
+- [OpenCTI Platform](https://github.com/OpenCTI-Platform/opencti) - Open Cyber Threat Intelligence Platform
+- [AssemblyLine](https://cybercentrecanada.github.io/assemblyline4_docs/) - Canadian Centre for Cyber Security
+- [STIX 2.1](https://oasis-open.github.io/cti-documentation/stix/intro.html) - Structured Threat Information Expression
 
-1. **Pas de support des liens externes** : URLs de téléchargement non supportées
-2. **IOCs limités** : Maximum 20 IOCs par type pour éviter la surcharge
-3. **Relations limitées** : Certains types de relations OpenCTI non supportés
+## 📧 Support
 
-### Limitations de Performance
-
-1. **Analyses séquentielles** : Un fichier à la fois
-2. **Pas de cache persistant** : Réanalyse possible si force_resubmit=true
-3. **Dépendance réseau** : Nécessite connexion stable vers AssemblyLine
-
-## ❓ FAQ
-
-### Configuration
-
-**Q: Comment changer le profil d'analyse AssemblyLine ?**
-R: Modifier `ASSEMBLYLINE_SUBMISSION_PROFILE` avec un profil configuré dans votre instance AssemblyLine.
-
-**Q: Peut-on analyser des fichiers de plus de 10MB ?**
-R: Oui, augmenter `ASSEMBLYLINE_MAX_FILE_SIZE_MB`. Attention aux ressources et temps d'analyse.
-
-**Q: Comment activer l'inclusion des IOCs suspects ?**
-R: Mettre `ASSEMBLYLINE_INCLUDE_SUSPICIOUS=true`. Augmente le nombre d'IOCs extraits.
-
-### Fonctionnement
-
-**Q: Le connecteur réanalyse-t-il les fichiers déjà traités ?**
-R: Non par défaut. Mettre `ASSEMBLYLINE_FORCE_RESUBMIT=true` pour forcer.
-
-**Q: Que se passe-t-il si AssemblyLine est indisponible ?**
-R: Le connecteur échouera avec une erreur de connexion. L'artifact ne sera pas enrichi.
-
-**Q: Les IOCs sont-ils dédupliqués ?**
-R: Oui, OpenCTI gère automatiquement la déduplication basée sur les patterns STIX.
-
-### Troubleshooting
-
-**Q: Comment voir les résultats AssemblyLine complets ?**
-R: Consulter l'URL dans la note créée : `View full results in AssemblyLine: https://...`
-
-**Q: Pourquoi certains IOCs ne sont-ils pas créés ?**
-R: Vérifier les logs pour les erreurs de création. Causes courantes : objets déjà existants, limites de rate.
-
-**Q: Comment désactiver les Attack Patterns ?**
-R: Mettre `ASSEMBLYLINE_CREATE_ATTACK_PATTERNS=false`.
-
-### Performance
-
-**Q: Comment optimiser les performances ?**
-R: 
-- Utiliser un profil AssemblyLine rapide
-- Limiter la taille des fichiers
-- Configurer un timeout adapté
-- Éviter force_resubmit en production
-
-**Q: Le connecteur peut-il traiter plusieurs fichiers simultanément ?**
-R: Non, traitement séquentiel. Déployer plusieurs instances si nécessaire.
+- **Issues**: [GitHub Issues](https://github.com/yourusername/opencti-assemblyline-connector/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/yourusername/opencti-assemblyline-connector/discussions)
+- **Discord**: [S1EM Community](https://discord.gg/your-discord)
 
 ---
 
-## 📞 Support
-
-Pour le support technique :
-1. Consulter les logs du connecteur
-2. Vérifier la configuration AssemblyLine
-3. Tester la connectivité réseau
-4. Consulter la documentation OpenCTI
-
-**Version du document :** 1.0  
-**Dernière mise à jour :** Novembre 2024  
-**Compatibilité :** OpenCTI 5.x, AssemblyLine 4.x+
+Made with ❤️ by [V1D1AN](https://github.com/V1D1AN)

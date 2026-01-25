@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  connector-assemblyline:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: opencti/connector-assemblyline:latest
+    container_name: opencti-assemblyline-connector
+    restart: unless-stopped
+    environment:
+      # OpenCTI Configuration
+      - OPENCTI_URL=${OPENCTI_URL}
+      - OPENCTI_TOKEN=${OPENCTI_TOKEN}
+      
+      # Connector Configuration
+      - CONNECTOR_ID=${CONNECTOR_ID}
+      - CONNECTOR_TYPE=INTERNAL_ENRICHMENT
+      - CONNECTOR_NAME=${CONNECTOR_NAME:-AssemblyLine}
+      - CONNECTOR_SCOPE=${CONNECTOR_SCOPE:-Artifact,StixFile}
+      - CONNECTOR_AUTO=${CONNECTOR_AUTO:-true}
+      - CONNECTOR_CONFIDENCE_LEVEL=${CONNECTOR_CONFIDENCE_LEVEL:-80}
+      - CONNECTOR_LOG_LEVEL=${CONNECTOR_LOG_LEVEL:-info}
+      
+      # AssemblyLine Configuration
+      - ASSEMBLYLINE_URL=${ASSEMBLYLINE_URL}
+      - ASSEMBLYLINE_USER=${ASSEMBLYLINE_USER}
+      - ASSEMBLYLINE_APIKEY=${ASSEMBLYLINE_APIKEY}
+      - ASSEMBLYLINE_VERIFY_SSL=${ASSEMBLYLINE_VERIFY_SSL:-true}
+      - ASSEMBLYLINE_SUBMISSION_PROFILE=${ASSEMBLYLINE_SUBMISSION_PROFILE:-static_with_dynamic}
+      - ASSEMBLYLINE_TIMEOUT=${ASSEMBLYLINE_TIMEOUT:-600}
+      - ASSEMBLYLINE_FORCE_RESUBMIT=${ASSEMBLYLINE_FORCE_RESUBMIT:-false}
+      - ASSEMBLYLINE_MAX_FILE_SIZE_MB=${ASSEMBLYLINE_MAX_FILE_SIZE_MB:-1}
+      - ASSEMBLYLINE_INCLUDE_SUSPICIOUS=${ASSEMBLYLINE_INCLUDE_SUSPICIOUS:-false}
+      - ASSEMBLYLINE_CREATE_ATTACK_PATTERNS=${ASSEMBLYLINE_CREATE_ATTACK_PATTERNS:-true}
+      - ASSEMBLYLINE_CREATE_MALWARE_ANALYSIS=${ASSEMBLYLINE_CREATE_MALWARE_ANALYSIS:-true}
+      - ASSEMBLYLINE_CREATE_OBSERVABLES=${ASSEMBLYLINE_CREATE_OBSERVABLES:-true}
+    networks:
+      - opencti_default
+    # Uncomment if you need to connect to external network
+    # extra_hosts:
+    #   - "assemblyline.local:192.168.1.100"
+
+networks:
+  opencti_default:
+    external: true

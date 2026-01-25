@@ -83,6 +83,12 @@ class AssemblyLineConnector:
             config, False, True  # Default: create malware analysis
         )
 
+        # Create observables from indicators (creates observable + based-on relationship)
+        self.assemblyline_create_observables = get_config_variable(
+            "ASSEMBLYLINE_CREATE_OBSERVABLES", ["assemblyline", "create_observables"],
+            config, False, True  # Default: create observables from indicators
+        )
+
         # Debug logs
         self.helper.log_info(f"AssemblyLine submission profile: {self.assemblyline_submission_profile}")
         self.helper.log_info(f"AssemblyLine timeout: {self.assemblyline_timeout}s")
@@ -91,6 +97,7 @@ class AssemblyLineConnector:
         self.helper.log_info(f"AssemblyLine include suspicious: {self.assemblyline_include_suspicious}")
         self.helper.log_info(f"AssemblyLine create attack patterns: {self.assemblyline_create_attack_patterns}")
         self.helper.log_info(f"AssemblyLine create malware analysis: {self.assemblyline_create_malware_analysis}")
+        self.helper.log_info(f"AssemblyLine create observables: {self.assemblyline_create_observables}")
 
         # Connect to AssemblyLine
         self.al_client = get_client(
@@ -800,12 +807,12 @@ class AssemblyLineConnector:
         """
         Create a Malware Analysis SDO in OpenCTI using stix2 library.
         This will appear in the "Malware Analysis" section of the Artifact.
-
+        
         Includes related objects (IOCs) in the bundle like Hybrid Analysis does.
         """
         try:
             import stix2
-
+            
             file_info = results.get("file_info", {})
             max_score = results.get("max_score", 0)
             sid = results.get("sid", "unknown")
@@ -978,9 +985,12 @@ class AssemblyLineConnector:
             self.helper.log_error(f"Traceback: {traceback.format_exc()}")
             return None
 
-    def _create_indicators(self, observable_id: str, results: Dict):
+    def _create_indicators(self, observable_id: str, results: Dict) -> Dict:
         """
-        Create OpenCTI indicators based on malicious IOCs from AssemblyLine results
+        Create OpenCTI indicators based on malicious IOCs from AssemblyLine results.
+        Also creates corresponding observables and links them with 'based-on' relationships.
+        
+        Returns a dict with counts of created objects.
         """
         file_info = results.get("file_info", {})
         tags = results.get("tags", {})
@@ -998,6 +1008,13 @@ class AssemblyLineConnector:
                 max_score = results["api_response"].get("max_score", 0)
 
         self.helper.log_info(f"Creating indicators - Score: {max_score}")
+
+        # Track created objects
+        created_counts = {
+            'indicators': 0,
+            'observables': 0,
+            'relationships': 0
+        }
 
         # Determine malicious score threshold or look for malicious IOCs
         is_malicious = max_score >= 500
@@ -1063,6 +1080,7 @@ class AssemblyLineConnector:
                     indicator_data["createdBy"] = self.assemblyline_author
 
                 indicator = self.helper.api.indicator.create(**indicator_data)
+                created_counts['indicators'] += 1
 
                 # Create relationship between original observable and indicator
                 self.helper.api.stix_core_relationship.create(
@@ -1071,19 +1089,59 @@ class AssemblyLineConnector:
                     relationship_type="related-to",
                     description="Domain contacted during malware analysis"
                 )
-                self.helper.log_info(f"Created indicator for malicious domain: {domain}")
+                created_counts['relationships'] += 1
+
+                # Create corresponding observable if enabled
+                if self.assemblyline_create_observables:
+                    try:
+                        domain_obs_data = {
+                            "observableData": {"type": "domain-name", "value": domain},
+                            "x_opencti_score": 80
+                        }
+                        if self.assemblyline_author:
+                            domain_obs_data["createdBy"] = self.assemblyline_author
+
+                        domain_observable = self.helper.api.stix_cyber_observable.create(**domain_obs_data)
+                        created_counts['observables'] += 1
+
+                        # Add malicious label to observable
+                        self.helper.api.stix_cyber_observable.add_label(
+                            id=domain_observable["id"],
+                            label="malicious"
+                        )
+
+                        # Create 'based-on' relationship between indicator and observable
+                        self.helper.api.stix_core_relationship.create(
+                            fromId=indicator["id"],
+                            toId=domain_observable["id"],
+                            relationship_type="based-on",
+                            description="Indicator based on observed malicious domain from AssemblyLine analysis"
+                        )
+                        created_counts['relationships'] += 1
+
+                        self.helper.log_info(f"Created indicator + observable for malicious domain: {domain}")
+                    except Exception as obs_e:
+                        self.helper.log_warning(f"Could not create observable for domain {domain}: {str(obs_e)}")
+                else:
+                    self.helper.log_info(f"Created indicator for malicious domain: {domain}")
+
             except Exception as e:
                 self.helper.log_warning(f"Could not create indicator for domain {domain}: {str(e)}")
 
         # Create indicators for malicious IPs
         for ip in malicious_iocs['ips'][:20]:  # Limit to 20
             try:
+                # Determine if IPv4 or IPv6
+                is_ipv6 = ':' in ip
+                observable_type = "IPv6-Addr" if is_ipv6 else "IPv4-Addr"
+                stix_type = "ipv6-addr" if is_ipv6 else "ipv4-addr"
+
                 indicator_data = {
                     "name": ip,
                     "description": f"IP address identified as malicious by AssemblyLine analysis (score: {max_score})",
-                    "pattern": f"[ipv4-addr:value = '{ip}']",
+                    "pattern": f"[{stix_type}:value = '{ip}']",
                     "pattern_type": "stix",
-                    "x_opencti_main_observable_type": "IPv4-Addr",
+                    "x_opencti_main_observable_type": observable_type,
                     "valid_from": self.helper.api.stix2.format_date(),
                     "labels": ["malicious", "assemblyline"],
                     "x_opencti_score": 80
@@ -1094,6 +1152,7 @@ class AssemblyLineConnector:
                     indicator_data["createdBy"] = self.assemblyline_author
 
                 indicator = self.helper.api.indicator.create(**indicator_data)
+                created_counts['indicators'] += 1
 
                 self.helper.api.stix_core_relationship.create(
                     fromId=observable_id,
@@ -1101,20 +1160,55 @@ class AssemblyLineConnector:
                     relationship_type="related-to",
                     description="IP contacted during malware analysis"
                 )
-                self.helper.log_info(f"Created indicator for malicious IP: {ip}")
+                created_counts['relationships'] += 1
+
+                # Create corresponding observable if enabled
+                if self.assemblyline_create_observables:
+                    try:
+                        ip_obs_data = {
+                            "observableData": {"type": stix_type, "value": ip},
+                            "x_opencti_score": 80
+                        }
+                        if self.assemblyline_author:
+                            ip_obs_data["createdBy"] = self.assemblyline_author
+
+                        ip_observable = self.helper.api.stix_cyber_observable.create(**ip_obs_data)
+                        created_counts['observables'] += 1
+
+                        # Add malicious label to observable
+                        self.helper.api.stix_cyber_observable.add_label(
+                            id=ip_observable["id"],
+                            label="malicious"
+                        )
+
+                        # Create 'based-on' relationship between indicator and observable
+                        self.helper.api.stix_core_relationship.create(
+                            fromId=indicator["id"],
+                            toId=ip_observable["id"],
+                            relationship_type="based-on",
+                            description="Indicator based on observed malicious IP from AssemblyLine analysis"
+                        )
+                        created_counts['relationships'] += 1
+
+                        self.helper.log_info(f"Created indicator + observable for malicious IP: {ip}")
+                    except Exception as obs_e:
+                        self.helper.log_warning(f"Could not create observable for IP {ip}: {str(obs_e)}")
+                else:
+                    self.helper.log_info(f"Created indicator for malicious IP: {ip}")
+
             except Exception as e:
                 self.helper.log_warning(f"Could not create indicator for IP {ip}: {str(e)}")
 
         # Create indicators for malicious URLs
         for url in malicious_iocs['urls'][:20]:  # Limit to 20
             try:
-                # Use the full URL as name, but truncate if too long for display
-                _ = url if len(url) <= 100 else url[:97] + "..."
+                # Escape single quotes in URL for STIX pattern
+                escaped_url = url.replace("'", "\\'")
 
                 indicator_data = {
                     "name": url,
                     "description": f"URL identified as malicious by AssemblyLine analysis (score: {max_score})",
-                    "pattern": f"[url:value = '{url}']",
+                    "pattern": f"[url:value = '{escaped_url}']",
                     "pattern_type": "stix",
                     "x_opencti_main_observable_type": "Url",
                     "valid_from": self.helper.api.stix2.format_date(),
@@ -1127,6 +1221,7 @@ class AssemblyLineConnector:
                     indicator_data["createdBy"] = self.assemblyline_author
 
                 indicator = self.helper.api.indicator.create(**indicator_data)
+                created_counts['indicators'] += 1
 
                 self.helper.api.stix_core_relationship.create(
                     fromId=observable_id,
@@ -1134,7 +1229,42 @@ class AssemblyLineConnector:
                     relationship_type="related-to",
                     description="URL contacted during malware analysis"
                 )
-                self.helper.log_info(f"Created indicator for malicious URL: {url}")
+                created_counts['relationships'] += 1
+
+                # Create corresponding observable if enabled
+                if self.assemblyline_create_observables:
+                    try:
+                        url_obs_data = {
+                            "observableData": {"type": "url", "value": url},
+                            "x_opencti_score": 80
+                        }
+                        if self.assemblyline_author:
+                            url_obs_data["createdBy"] = self.assemblyline_author
+
+                        url_observable = self.helper.api.stix_cyber_observable.create(**url_obs_data)
+                        created_counts['observables'] += 1
+
+                        # Add malicious label to observable
+                        self.helper.api.stix_cyber_observable.add_label(
+                            id=url_observable["id"],
+                            label="malicious"
+                        )
+
+                        # Create 'based-on' relationship between indicator and observable
+                        self.helper.api.stix_core_relationship.create(
+                            fromId=indicator["id"],
+                            toId=url_observable["id"],
+                            relationship_type="based-on",
+                            description="Indicator based on observed malicious URL from AssemblyLine analysis"
+                        )
+                        created_counts['relationships'] += 1
+
+                        self.helper.log_info(f"Created indicator + observable for malicious URL: {url}")
+                    except Exception as obs_e:
+                        self.helper.log_warning(f"Could not create observable for URL {url}: {str(obs_e)}")
+                else:
+                    self.helper.log_info(f"Created indicator for malicious URL: {url}")
+
             except Exception as e:
                 self.helper.log_warning(f"Could not create indicator for URL {url}: {str(e)}")
 
@@ -1165,6 +1295,14 @@ class AssemblyLineConnector:
                 self.helper.log_info(f"Created malware family: {family}")
             except Exception as e:
                 self.helper.log_warning(f"Could not create malware family {family}: {str(e)}")
+
+        self.helper.log_info(
+            f"Created {created_counts['indicators']} indicators, "
+            f"{created_counts['observables']} observables, "
+            f"{created_counts['relationships']} relationships"
+        )
+
+        return created_counts
 
     def _create_relationships(self, observable_id: str, results: Dict) -> List[str]:
         """
@@ -1280,8 +1418,8 @@ class AssemblyLineConnector:
             tags = results.get("tags", {})
             malicious_iocs = self._extract_malicious_iocs(tags)
 
-            # Create OpenCTI enrichments
-            self._create_indicators(observable["id"], results)
+            # Create OpenCTI enrichments (indicators + observables)
+            created_counts = self._create_indicators(observable["id"], results)
 
             # Create relationships and get list of created observables
             created_observables = self._create_relationships(observable["id"], results)
@@ -1411,6 +1549,11 @@ class AssemblyLineConnector:
             else:
                 malware_analysis_note = f"\n**Malware Analysis Created:** No"
 
+            # Add observables creation info to note
+            observables_note = ""
+            if self.assemblyline_create_observables:
+                observables_note = f"\n**Observables Created:** {created_counts.get('observables', 0)} (linked to indicators with 'based-on' relationships)"
+
             note_content = f"""# AssemblyLine Analysis Results
 
 **Verdict:** {verdict}
@@ -1421,7 +1564,7 @@ class AssemblyLineConnector:
 - **Malicious Domains:** {len(malicious_iocs['domains'])}
 - **Malicious IP Addresses:** {len(malicious_iocs['ips'])}
 - **Malicious URLs:** {len(malicious_iocs['urls'])}
-- **Malware Families:** {len(malicious_iocs['families'])}
+- **Malware Families:** {len(malicious_iocs['families'])}{observables_note}
 
 ## MITRE ATT&CK Analysis
 - **Attack Techniques Identified:** {attack_patterns_count}
