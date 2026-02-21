@@ -14,8 +14,8 @@ This connector automatically submits files (Artifacts and StixFiles) to Assembly
 - [Features](#-features)
 - [Requirements](#-requirements)
 - [Installation](#-installation)
-  - [Docker (Recommended)](#docker-recommended)
-  - [Manual Installation](#manual-installation)
+- [Docker (Recommended)](#docker-recommended)
+- [Manual Installation](#manual-installation)
 - [Configuration](#-configuration)
 - [Usage](#-usage)
 - [Created Objects](#-created-objects)
@@ -128,6 +128,7 @@ python main.py
 | `ASSEMBLYLINE_APIKEY` | ✅ | - | AssemblyLine API key |
 | `ASSEMBLYLINE_VERIFY_SSL` | ❌ | `true` | Verify SSL certificates |
 | `ASSEMBLYLINE_SUBMISSION_PROFILE` | ❌ | `static_with_dynamic` | AssemblyLine submission profile |
+| `ASSEMBLYLINE_CLASSIFICATION` | ❌ | `TLP:C` | Classification for submitted files |
 | `ASSEMBLYLINE_TIMEOUT` | ❌ | `600` | Analysis timeout in seconds |
 | `ASSEMBLYLINE_FORCE_RESUBMIT` | ❌ | `false` | Force resubmission even if already analyzed |
 | `ASSEMBLYLINE_MAX_FILE_SIZE_MB` | ❌ | `1` | Maximum file size to submit (MB) |

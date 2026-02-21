@@ -50,6 +50,9 @@ class AssemblyLineConnector:
             "ASSEMBLYLINE_SUBMISSION_PROFILE", ["assemblyline", "submission_profile"],
             config, False, "static_with_dynamic"
         )
+        self.assemblyline_classification = os.environ.get(
+            "ASSEMBLYLINE_CLASSIFICATION", "TLP:C"
+        )
         self.assemblyline_timeout = int(get_config_variable(
             "ASSEMBLYLINE_TIMEOUT", ["assemblyline", "timeout"],
             config, False, 600  # Default: 10 minutes
@@ -476,7 +479,7 @@ class AssemblyLineConnector:
                     'source': 'OpenCTI'
                 },
                 'params': {
-                    'classification': 'TLP:A',
+                    'classification': self.assemblyline_classification,
                     'description': f'Submitted from OpenCTI - {observable["id"]}',
                     'deep_scan': False,
                     'priority': 1000,
