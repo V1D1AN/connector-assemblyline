@@ -3,18 +3,10 @@
 ## [1.1.0] - 2026-02-26
 
 ### Added
-- **Sequential Queue Mode**: New `ASSEMBLYLINE_SEQUENTIAL_MODE` option (enabled by default) that processes files one at a time, preventing AssemblyLine from being overloaded with concurrent analyses
-- New `assemblyline_queue.py` module with thread-safe FIFO queue and background worker
-- Polling mechanism using AssemblyLine `/api/v4/submission/is_completed/{sid}/` endpoint
+- **Sequential Mode**: New `ASSEMBLYLINE_SEQUENTIAL_MODE` option (enabled by default) that checks if AssemblyLine has active analyses before submitting a new file, preventing platform overload
+- New `_wait_for_al_ready()` method that queries `state:submitted` on AL submission index
 - Configurable poll interval (`ASSEMBLYLINE_POLL_INTERVAL`, default: 30s)
-- Configurable max retries (`ASSEMBLYLINE_MAX_RETRIES`, default: 2)
-- Queue status monitoring via logs (`[Queue]` prefix)
-- Error notes created in OpenCTI when analysis fails or times out
-- Duplicate detection: same observable cannot be queued twice
-
-### Changed
-- `_process_message()` now routes to queue in sequential mode or direct processing in legacy mode
-- `start()` now initializes and starts the queue worker thread
+- Logs with `[Sequential]` prefix when waiting for AL to be idle
 
 All notable changes to this project will be documented in this file.
 
