@@ -35,3 +35,8 @@ assemblyline:
   create_attack_patterns: true  # Create MITRE ATT&CK Attack Patterns
   create_malware_analysis: true  # Create Malware Analysis SDO
   create_observables: true  # Create Observables from Indicators
+  
+  # Sequential queue settings (prevents AssemblyLine overload)
+  sequential_mode: true  # Process files one at a time (recommended)
+  poll_interval: 30  # Seconds between status checks when analysis is running
+  max_retries: 2  # Max retry attempts for failed submissions

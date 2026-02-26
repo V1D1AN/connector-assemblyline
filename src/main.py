@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Dict, List
 from pycti import OpenCTIConnectorHelper, get_config_variable
 from assemblyline_client import get_client
+from assemblyline_queue import AssemblyLineQueue
 
 
 class AssemblyLineConnector:
@@ -92,6 +93,24 @@ class AssemblyLineConnector:
             config, False, True  # Default: create observables from indicators
         )
 
+        # Sequential queue configuration
+        self.assemblyline_sequential_mode = get_config_variable(
+            "ASSEMBLYLINE_SEQUENTIAL_MODE", ["assemblyline", "sequential_mode"],
+            config, False, True  # Default: enabled to prevent AL overload
+        )
+        if isinstance(self.assemblyline_sequential_mode, str):
+            self.assemblyline_sequential_mode = self.assemblyline_sequential_mode.lower() in ('true', '1', 'yes')
+
+        self.assemblyline_poll_interval = int(get_config_variable(
+            "ASSEMBLYLINE_POLL_INTERVAL", ["assemblyline", "poll_interval"],
+            config, False, 30  # Default: check every 30 seconds
+        ))
+
+        self.assemblyline_max_retries = int(get_config_variable(
+            "ASSEMBLYLINE_MAX_RETRIES", ["assemblyline", "max_retries"],
+            config, False, 2  # Default: 2 retries
+        ))
+
         # Debug logs
         self.helper.log_info(f"AssemblyLine submission profile: {self.assemblyline_submission_profile}")
         self.helper.log_info(f"AssemblyLine timeout: {self.assemblyline_timeout}s")
@@ -101,6 +120,9 @@ class AssemblyLineConnector:
         self.helper.log_info(f"AssemblyLine create attack patterns: {self.assemblyline_create_attack_patterns}")
         self.helper.log_info(f"AssemblyLine create malware analysis: {self.assemblyline_create_malware_analysis}")
         self.helper.log_info(f"AssemblyLine create observables: {self.assemblyline_create_observables}")
+        self.helper.log_info(f"AssemblyLine sequential mode: {self.assemblyline_sequential_mode}")
+        self.helper.log_info(f"AssemblyLine poll interval: {self.assemblyline_poll_interval}s")
+        self.helper.log_info(f"AssemblyLine max retries: {self.assemblyline_max_retries}")
 
         # Connect to AssemblyLine
         self.al_client = get_client(
@@ -113,6 +135,19 @@ class AssemblyLineConnector:
         self.assemblyline_author = None
         self.assemblyline_identity_standard_id = None
         self._get_assemblyline_identity()
+
+        # Initialize the sequential queue
+        self.queue = AssemblyLineQueue(
+            al_client=self.al_client,
+            submit_callback=self._submit_to_assemblyline,
+            result_callback=self._process_al_results,
+            error_callback=self._handle_al_error,
+            poll_interval=self.assemblyline_poll_interval,
+            submission_timeout=self.assemblyline_timeout,
+            max_retries=self.assemblyline_max_retries,
+            enabled=self.assemblyline_sequential_mode,
+            helper=self.helper,
+        )
 
     def _get_assemblyline_identity(self):
         """
@@ -1397,9 +1432,274 @@ class AssemblyLineConnector:
 
         return created_observables
 
+    # ──────────────────────────────────────────────
+    # Sequential Queue Callbacks
+    # ──────────────────────────────────────────────
+
+    def _submit_to_assemblyline(self, observable_data: Dict) -> str:
+        """
+        Queue callback: submit a file to AssemblyLine and return the SID.
+        Called by the queue worker when it's this file's turn to be analyzed.
+        """
+        observable_id = observable_data["id"]
+        entity_type = observable_data.get("entity_type", "Unknown")
+
+        self.helper.log_info(
+            f"[Queue] Submitting {entity_type} {observable_id} to AssemblyLine"
+        )
+
+        # Get file content
+        file_content, file_name, file_hash = self._get_file_content(observable_data)
+
+        # If no file content but hash exists, check for existing analysis
+        if file_content is None and file_hash:
+            existing = self._check_existing_analysis(file_hash)
+            if existing and existing.get('state') == 'completed':
+                self.helper.log_info(
+                    f"[Queue] Reusing existing analysis for hash: {file_hash}"
+                )
+                self._process_al_results(observable_data, existing)
+                return None  # No SID needed, already processed
+
+        if not file_content:
+            raise Exception(f"No file content available for {observable_id}")
+
+        # Check file size
+        file_size_mb = len(file_content) / (1024 * 1024)
+        if file_size_mb > self.assemblyline_max_file_size_mb:
+            raise Exception(
+                f"File size ({file_size_mb:.2f} MB) exceeds limit "
+                f"({self.assemblyline_max_file_size_mb} MB)"
+            )
+
+        # Check existing analysis (unless force resubmit)
+        if not self.assemblyline_force_resubmit and file_hash:
+            existing = self._check_existing_analysis(file_hash)
+            if existing and existing.get('state') == 'completed':
+                self.helper.log_info("[Queue] Reusing existing analysis results")
+                self._process_al_results(observable_data, existing)
+                return None
+
+        # Submit to AssemblyLine via REST API
+        import io
+        json_data = {
+            'name': file_name,
+            'submission_profile': self.assemblyline_submission_profile,
+            'metadata': {
+                'submitter': 'opencti-connector',
+                'source': 'OpenCTI'
+            },
+            'params': {
+                'classification': self.assemblyline_classification,
+                'description': f'Submitted from OpenCTI - {observable_id}',
+                'deep_scan': False,
+                'priority': 1000,
+                'ignore_cache': False,
+                'services': {
+                    'selected': [],
+                    'resubmit': [],
+                    'excluded': []
+                }
+            }
+        }
+
+        files = {
+            'json': (None, json.dumps(json_data), 'application/json'),
+            'bin': (file_name, io.BytesIO(file_content), 'application/octet-stream')
+        }
+
+        headers = {
+            'X-User': self.assemblyline_user,
+            'X-Apikey': self.assemblyline_apikey
+        }
+
+        submit_url = f"{self.assemblyline_url}/api/v4/submit/"
+        response = requests.post(
+            submit_url, files=files, headers=headers,
+            verify=self.assemblyline_verify_ssl
+        )
+
+        if response.status_code != 200:
+            raise Exception(f"HTTP {response.status_code}: {response.text}")
+
+        result = response.json()
+        submission = result.get('api_response', result)
+        sid = submission.get("sid")
+
+        self.helper.log_info(f"[Queue] Submission successful: SID={sid}")
+        return sid
+
+    def _process_al_results(self, observable_data: Dict, results: Dict):
+        """
+        Queue callback: process completed AssemblyLine results.
+        Creates indicators, observables, attack patterns, malware analysis,
+        and the summary note in OpenCTI.
+        """
+        observable_id = observable_data["id"]
+        max_score = results.get("max_score", 0)
+        sid = results.get("sid", "N/A")
+
+        self.helper.log_info(
+            f"[Queue] Processing results for {observable_id} "
+            f"(score: {max_score}, SID: {sid})"
+        )
+
+        try:
+            # Extract malicious IOCs
+            tags = results.get("tags", {})
+            malicious_iocs = self._extract_malicious_iocs(tags)
+
+            # Create indicators + observables
+            created_counts = self._create_indicators(observable_id, results)
+
+            # Create relationships
+            created_observables = self._create_relationships(observable_id, results)
+
+            # Create Malware Analysis SDO if enabled
+            malware_analysis_id = None
+            if self.assemblyline_create_malware_analysis:
+                malware_analysis_id = self._create_malware_analysis(
+                    observable_id, observable_data, results,
+                    malicious_iocs, created_observables
+                )
+
+            # Get file information
+            file_info = results.get("file_info", {})
+            if not file_info and "api_response" in results:
+                file_info = results["api_response"].get("file_info", {})
+
+            file_sha256 = file_info.get("sha256", "N/A")
+            file_type = file_info.get("type", "N/A")
+            file_size = file_info.get("size", "N/A")
+
+            # Format file size
+            if isinstance(file_size, (int, float)) and file_size != "N/A":
+                if file_size >= 1024 * 1024:
+                    size_str = f"{file_size:,} bytes ({file_size / (1024*1024):.1f} MB)"
+                elif file_size >= 1024:
+                    size_str = f"{file_size:,} bytes ({file_size / 1024:.1f} KB)"
+                else:
+                    size_str = f"{file_size:,} bytes"
+            else:
+                size_str = "N/A bytes"
+
+            # Create MITRE ATT&CK attack patterns
+            attack_patterns_count = 0
+            if self.assemblyline_create_attack_patterns:
+                try:
+                    attack_patterns = self._extract_attack_patterns(results)
+                    if attack_patterns:
+                        created_attack_patterns = self._create_attack_patterns(
+                            attack_patterns, file_sha256
+                        )
+                        attack_patterns_count = len(created_attack_patterns)
+                        for pattern_id in created_attack_patterns:
+                            try:
+                                self.helper.api.stix_core_relationship.create(
+                                    fromId=observable_id, toId=pattern_id,
+                                    relationship_type="uses",
+                                    description="Attack technique observed during AssemblyLine malware analysis"
+                                )
+                            except Exception as e:
+                                self.helper.log_warning(f"Could not link attack pattern: {str(e)}")
+                except Exception as e:
+                    self.helper.log_warning(f"Error processing attack patterns: {str(e)}")
+
+            # Determine verdict
+            verdict = "SAFE"
+            if max_score >= 500:
+                verdict = "MALICIOUS"
+            elif (malicious_iocs['domains'] or malicious_iocs['ips']
+                  or malicious_iocs['urls'] or malicious_iocs['families']):
+                verdict = "MALICIOUS"
+
+            # Build note
+            malware_analysis_note = (
+                "\n**Malware Analysis Created:** Yes (visible in Malware Analysis section)"
+                if malware_analysis_id
+                else "\n**Malware Analysis Created:** No"
+            )
+
+            observables_note = ""
+            if self.assemblyline_create_observables:
+                observables_note = (
+                    f"\n**Observables Created:** {created_counts.get('observables', 0)} "
+                    f"(linked to indicators with 'based-on' relationships)"
+                )
+
+            note_content = f"""# AssemblyLine Analysis Results
+
+**Verdict:** {verdict}
+**Score:** {max_score}/2000
+**Submission ID:** {sid}{malware_analysis_note}
+
+## Malicious IOCs Created as Indicators
+- **Malicious Domains:** {len(malicious_iocs['domains'])}
+- **Malicious IP Addresses:** {len(malicious_iocs['ips'])}
+- **Malicious URLs:** {len(malicious_iocs['urls'])}
+- **Malware Families:** {len(malicious_iocs['families'])}{observables_note}
+
+## MITRE ATT&CK Analysis
+- **Attack Techniques Identified:** {attack_patterns_count}
+
+## File Information
+- **SHA256:** {file_sha256}
+- **Type:** {file_type}
+- **Size:** {size_str}
+
+View full results in AssemblyLine: {self.assemblyline_url}/submission/{sid}
+"""
+
+            note_data = {
+                "abstract": "AssemblyLine Analysis Results",
+                "content": note_content,
+                "object_refs": [observable_id]
+            }
+            if self.assemblyline_author:
+                note_data["createdBy"] = self.assemblyline_author
+
+            self.helper.api.note.create(**note_data)
+            self.helper.log_info(f"[Queue] Enrichment complete for {observable_id}")
+
+        except Exception as e:
+            self.helper.log_error(
+                f"[Queue] Error processing results for {observable_id}: {str(e)}"
+            )
+
+    def _handle_al_error(self, observable_data: Dict, error_message: str):
+        """
+        Queue callback: handle analysis errors.
+        Creates an error note in OpenCTI to inform the analyst.
+        """
+        observable_id = observable_data["id"]
+        self.helper.log_error(
+            f"[Queue] Analysis failed for {observable_id}: {error_message}"
+        )
+        try:
+            self.helper.api.note.create(
+                abstract="AssemblyLine Analysis Error",
+                content=f"""# AssemblyLine Analysis Error
+
+**Observable:** {observable_id}
+**Error:** {error_message}
+**Timestamp:** {datetime.utcnow().isoformat()}Z
+
+The file could not be analyzed by AssemblyLine.
+Please check the AssemblyLine platform status and retry manually if needed.
+""",
+                object_refs=[observable_id],
+            )
+        except Exception as e:
+            self.helper.log_warning(f"Could not create error note: {e}")
+
+    # ──────────────────────────────────────────────
+    # Main message handler
+    # ──────────────────────────────────────────────
+
     def _process_message(self, data: Dict) -> str:
         """
-        Process an observable sent by OpenCTI stream
+        Process an observable sent by OpenCTI stream.
+        If sequential mode is enabled, files are queued instead of processed immediately.
         """
         observable = data["enrichment_entity"]
 
@@ -1410,6 +1710,32 @@ class AssemblyLineConnector:
             msg = f"Observable type {observable['entity_type']} not supported"
             self.helper.log_info(msg)
             return msg
+
+        # ── SEQUENTIAL MODE: enqueue the file ──
+        if self.queue.enabled:
+            enqueued = self.queue.enqueue(
+                observable_id=observable["id"],
+                observable_data=observable,
+            )
+            if enqueued:
+                status = self.queue.get_queue_status()
+                queue_size = status["queue_size"]
+                current = status.get("current_analysis")
+
+                if current and current.get("sid"):
+                    self.helper.log_info(
+                        f"File queued. Currently analyzing SID: {current['sid']} "
+                        f"({queue_size} file(s) waiting)"
+                    )
+                else:
+                    self.helper.log_info(
+                        f"File queued, will be submitted shortly "
+                        f"({queue_size} file(s) in queue)"
+                    )
+
+                return f"File added to sequential analysis queue (position: {queue_size})"
+
+        # ── DIRECT MODE: original behavior ──
 
         try:
             self.helper.log_info(f"Starting analysis for observable {observable['id']}")
@@ -1605,6 +1931,20 @@ View full results in AssemblyLine: {self.assemblyline_url}/submission/{sid}
         Start the connector and listen for incoming messages
         """
         self.helper.log_info("Starting AssemblyLine connector...")
+
+        # Start the sequential queue worker
+        self.queue.start()
+
+        if self.queue.enabled:
+            self.helper.log_info(
+                "Sequential mode ENABLED - files will be analyzed one at a time "
+                "(preventing AssemblyLine overload)"
+            )
+        else:
+            self.helper.log_info(
+                "Sequential mode DISABLED - files will be sent directly to AssemblyLine"
+            )
+
         self.helper.listen(self._process_message)
 
 
