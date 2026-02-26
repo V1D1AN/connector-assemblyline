@@ -42,6 +42,7 @@ This connector automatically submits files (Artifacts and StixFiles) to Assembly
 
 ### Advanced Features
 
+- **Sequential Queue Mode**: Processes files one at a time to prevent AssemblyLine overload (enabled by default)
 - **Malware Analysis SDO**: Creates STIX 2.1 Malware Analysis objects (visible in OpenCTI's "Malware Analysis" section)
 - **Author Attribution**: All created objects are attributed to "AssemblyLine" identity
 - **Suspicious IOC Support**: Optional inclusion of suspicious (not just malicious) IOCs
@@ -136,6 +137,9 @@ python main.py
 | `ASSEMBLYLINE_CREATE_ATTACK_PATTERNS` | ❌ | `true` | Create MITRE ATT&CK patterns |
 | `ASSEMBLYLINE_CREATE_MALWARE_ANALYSIS` | ❌ | `true` | Create Malware Analysis SDO |
 | `ASSEMBLYLINE_CREATE_OBSERVABLES` | ❌ | `true` | Create Observables from Indicators |
+| `ASSEMBLYLINE_SEQUENTIAL_MODE` | ❌ | `true` | Process files one at a time (prevents AssemblyLine overload) |
+| `ASSEMBLYLINE_POLL_INTERVAL` | ❌ | `30` | Seconds between status checks during analysis |
+| `ASSEMBLYLINE_MAX_RETRIES` | ❌ | `2` | Max retry attempts for failed submissions |
 
 ### Configuration File (config.yml)
 
@@ -166,6 +170,9 @@ assemblyline:
   create_attack_patterns: true
   create_malware_analysis: true
   create_observables: true
+  sequential_mode: true
+  poll_interval: 30
+  max_retries: 2
 ```
 
 ## 📖 Usage
@@ -186,12 +193,18 @@ When `CONNECTOR_AUTO=true`, the connector automatically processes any new Artifa
 ```mermaid
 graph LR
     A[File uploaded to OpenCTI] --> B{Auto enrichment?}
-    B -->|Yes| C[Submit to AssemblyLine]
+    B -->|Yes| C{Sequential mode?}
     B -->|No| D[Manual trigger]
     D --> C
-    C --> E{Already analyzed?}
+    C -->|Yes| Q[Add to Queue]
+    C -->|No| S[Submit directly]
+    Q --> W{AL busy?}
+    W -->|Yes| WA[Wait - poll is_completed]
+    W -->|No| S
+    WA -->|Completed| S
+    S --> E{Already analyzed?}
     E -->|Yes| F[Reuse results]
-    E -->|No| G[Wait for analysis]
+    E -->|No| G[Submit & wait]
     G --> H[Get results]
     F --> H
     H --> I[Create Indicators]
@@ -199,7 +212,24 @@ graph LR
     J --> K[Create Attack Patterns]
     K --> L[Create Malware Analysis]
     L --> M[Create Note]
+    M --> N{Queue empty?}
+    N -->|No| S
+    N -->|Yes| O[Done]
 ```
+
+### Sequential Queue
+
+When `ASSEMBLYLINE_SEQUENTIAL_MODE=true` (default), the connector uses a FIFO queue to ensure only one file is analyzed at a time by AssemblyLine. This prevents the platform from being overloaded when multiple files are submitted simultaneously.
+
+The queue works as follows:
+
+1. When a new file arrives, it is added to the queue
+2. A background worker submits the first file to AssemblyLine
+3. The worker polls `/api/v4/submission/is_completed/{sid}/` every `ASSEMBLYLINE_POLL_INTERVAL` seconds
+4. Once the analysis is complete, results are processed and the next file in the queue is submitted
+5. If a submission fails, it is retried up to `ASSEMBLYLINE_MAX_RETRIES` times
+
+Queue activity is logged with the `[Queue]` prefix for easy filtering.
 
 ## 📊 Created Objects
 
@@ -301,6 +331,25 @@ A summary note attached to the analyzed file with:
 **Cause**: Self-signed or invalid SSL certificate on AssemblyLine.
 
 **Solution**: Set `ASSEMBLYLINE_VERIFY_SSL=false` (not recommended for production).
+
+#### "AssemblyLine Analysis Error" note in OpenCTI
+
+**Cause**: The sequential queue encountered an error during submission or the analysis timed out.
+
+**Solution**:
+- Check AssemblyLine platform status and available resources
+- Increase `ASSEMBLYLINE_TIMEOUT` if analyses are taking longer than expected
+- Check connector logs for `[Queue]` entries to identify the exact error
+- Retry manually via the Enrichment button in OpenCTI
+
+#### Files are taking too long to be analyzed
+
+**Cause**: In sequential mode, files are processed one at a time. If analyses are slow, the queue can grow.
+
+**Solution**:
+- Check the queue status in the logs (`[Queue] Enqueued: ... (queue size: N)`)
+- Reduce `ASSEMBLYLINE_POLL_INTERVAL` for faster detection of completed analyses
+- If your AssemblyLine instance can handle parallel analyses, set `ASSEMBLYLINE_SEQUENTIAL_MODE=false`
 
 ### Debug Mode
 
