@@ -36,6 +36,12 @@ assemblyline:
   create_malware_analysis: true  # Create Malware Analysis SDO
   create_observables: true  # Create Observables from Indicators
   
+  # Unclassified observables (domains/URLs not tagged malicious or safe)
+  # Ingested as simple observables with low confidence for passive correlation
+  # IPs are excluded to avoid false positives from version strings
+  create_unclassified_observables: false  # Disabled by default
+  unclassified_score: 20  # Low score for unclassified observables (0-100)
+  
   # Sequential mode (prevents AssemblyLine overload)
   sequential_mode: true  # Wait for AL to be idle before submitting
   poll_interval: 30  # Seconds between checks when AL is busy
