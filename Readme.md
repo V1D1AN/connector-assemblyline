@@ -46,6 +46,8 @@ This connector automatically submits files (Artifacts and StixFiles) to Assembly
 - **Malware Analysis SDO**: Creates STIX 2.1 Malware Analysis objects (visible in OpenCTI's "Malware Analysis" section)
 - **Author Attribution**: All created objects are attributed to "AssemblyLine" identity
 - **Suspicious IOC Support**: Optional inclusion of suspicious (not just malicious) IOCs
+- **Unclassified Observables**: Optional ingestion of domains/URLs not tagged as malicious or safelisted, created as simple observables with low confidence for passive correlation (IPs excluded to avoid version string false positives)
+- **Built-in Safelist**: Automatically filters known legitimate infrastructure (Microsoft, Google, CRL/OCSP, CDN, Apple, Mozilla) from unclassified IOCs
 - **Configurable File Size Limit**: Prevents submission of files exceeding a specified size
 
 ## 📦 Requirements
@@ -137,6 +139,8 @@ python main.py
 | `ASSEMBLYLINE_CREATE_ATTACK_PATTERNS` | ❌ | `true` | Create MITRE ATT&CK patterns |
 | `ASSEMBLYLINE_CREATE_MALWARE_ANALYSIS` | ❌ | `true` | Create Malware Analysis SDO |
 | `ASSEMBLYLINE_CREATE_OBSERVABLES` | ❌ | `true` | Create Observables from Indicators |
+| `ASSEMBLYLINE_CREATE_UNCLASSIFIED_OBSERVABLES` | ❌ | `false` | Create simple observables for unclassified domains/URLs (not tagged malicious or safelisted). IPs excluded. |
+| `ASSEMBLYLINE_UNCLASSIFIED_SCORE` | ❌ | `20` | Score assigned to unclassified observables (0-100, lower = less confidence) |
 | `ASSEMBLYLINE_SEQUENTIAL_MODE` | ❌ | `true` | Wait for AL to be idle before submitting (prevents overload) |
 | `ASSEMBLYLINE_POLL_INTERVAL` | ❌ | `30` | Seconds between checks when AL is busy |
 
@@ -169,6 +173,8 @@ assemblyline:
   create_attack_patterns: true
   create_malware_analysis: true
   create_observables: true
+  create_unclassified_observables: false
+  unclassified_score: 20
   sequential_mode: true
   poll_interval: 30
 ```
@@ -206,7 +212,10 @@ graph LR
     F --> H
     H --> I[Create Indicators]
     I --> J[Create Observables]
-    J --> K[Create Attack Patterns]
+    J --> U{Unclassified enabled?}
+    U -->|Yes| V[Create Unclassified Observables]
+    U -->|No| K[Create Attack Patterns]
+    V --> K
     K --> L[Create Malware Analysis]
     L --> M[Create Note]
 ```
@@ -239,6 +248,18 @@ When `ASSEMBLYLINE_CREATE_OBSERVABLES=true`, corresponding Observables are creat
 - URL
 
 Each Observable is linked to its Indicator via a **"based-on"** relationship.
+
+### Unclassified Observables
+
+When `ASSEMBLYLINE_CREATE_UNCLASSIFIED_OBSERVABLES=true`, domains and URLs observed during analysis that are **not tagged as malicious** and **not in the built-in safelist** are created as simple observables:
+
+- **Types**: Domain-Name, URL only (IPs are excluded to avoid version string false positives)
+- **Score**: Configurable via `ASSEMBLYLINE_UNCLASSIFIED_SCORE` (default: 20/100)
+- **Label**: `assemblyline-unverified`
+- **Relationship**: "related-to" with the analyzed file (domains only)
+- **No Indicator created**: These are purely observables for passive correlation
+
+The built-in safelist filters known legitimate infrastructure (Microsoft, Google, certificate authorities, CDN providers, Apple, Mozilla). This prevents ingesting noise while capturing potentially interesting domains/URLs that threat intel feeds haven't classified yet.
 
 ### Malware Objects
 
