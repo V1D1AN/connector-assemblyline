@@ -940,8 +940,13 @@ class AssemblyLineConnector:
                     label="assemblyline-unverified"
                 )
 
-                # Note: Skip 'related-to' for URLs to avoid OpenCTI restriction issues
-                # The URL observables are created as standalone entities for correlation
+                # Create 'related-to' relationship to the analyzed file
+                self.helper.api.stix_core_relationship.create(
+                    fromId=observable_id,
+                    toId=url_observable["id"],
+                    relationship_type="related-to",
+                    description="URL observed during AssemblyLine analysis (not yet verified as malicious)"
+                )
 
                 self.helper.log_info(f"Created unclassified observable for URL: {url}")
             except Exception as e:
