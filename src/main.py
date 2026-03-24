@@ -803,20 +803,21 @@ class AssemblyLineConnector:
     def _extract_unclassified_iocs(self, tags: Dict, malicious_iocs: Dict) -> Dict:
         """
         Extract IOCs that are NOT classified as malicious/suspicious AND NOT safelisted.
-        These are domains and URLs observed during analysis that have no verdict yet.
+        These are domains, URLs and emails observed during analysis that have no verdict yet.
         IPs are deliberately excluded to avoid false positives from version strings.
 
-        Returns a dictionary with 'domains' and 'urls' lists only (no IPs).
+        Returns a dictionary with 'domains', 'urls' and 'emails' lists (no IPs).
         """
         unclassified_iocs = {
             'domains': [],
-            'urls': []
+            'urls': [],
+            'emails': []
         }
 
         if not tags:
             return unclassified_iocs
 
-        self.helper.log_info("Extracting unclassified IOCs (domains/URLs not tagged malicious or safelisted)...")
+        self.helper.log_info("Extracting unclassified IOCs (domains/URLs/emails not tagged malicious or safelisted)...")
 
         for main_category, category_data in tags.items():
             if not isinstance(category_data, dict):
@@ -837,11 +838,12 @@ class AssemblyLineConnector:
                     if classification in ["malicious", "suspicious"]:
                         continue
 
-                    # Only process domains and URLs (skip IPs deliberately)
+                    # Detect type from tag_type
                     is_domain = "domain" in tag_type.lower()
                     is_url = "uri" in tag_type.lower() or "url" in tag_type.lower()
+                    is_email = "email" in tag_type.lower()
 
-                    if not is_domain and not is_url:
+                    if not is_domain and not is_url and not is_email:
                         continue
 
                     # Skip if already in malicious IOCs
@@ -851,7 +853,7 @@ class AssemblyLineConnector:
                         continue
 
                     # Skip safelisted domains/URLs
-                    if self._is_safelisted_domain(value):
+                    if (is_domain or is_url) and self._is_safelisted_domain(value):
                         self.helper.log_info(f"Skipping safelisted: {value}")
                         continue
 
@@ -862,10 +864,14 @@ class AssemblyLineConnector:
                     elif is_url and value not in unclassified_iocs['urls']:
                         unclassified_iocs['urls'].append(value)
                         self.helper.log_info(f"Found unclassified URL: {value} (classification: {classification})")
+                    elif is_email and value not in unclassified_iocs['emails']:
+                        unclassified_iocs['emails'].append(value)
+                        self.helper.log_info(f"Found unclassified email: {value} (classification: {classification})")
 
         self.helper.log_info(
             f"Extracted unclassified IOCs - Domains: {len(unclassified_iocs['domains'])}, "
-            f"URLs: {len(unclassified_iocs['urls'])}"
+            f"URLs: {len(unclassified_iocs['urls'])}, "
+            f"Emails: {len(unclassified_iocs['emails'])}"
         )
 
         return unclassified_iocs
@@ -880,7 +886,8 @@ class AssemblyLineConnector:
         """
         created_counts = {
             'unclassified_domains': 0,
-            'unclassified_urls': 0
+            'unclassified_urls': 0,
+            'unclassified_emails': 0
         }
 
         # Create observables for unclassified domains
@@ -940,9 +947,41 @@ class AssemblyLineConnector:
             except Exception as e:
                 self.helper.log_warning(f"Could not create unclassified observable for URL {url}: {str(e)}")
 
+        # Create observables for unclassified emails
+        for email in unclassified_iocs.get('emails', [])[:30]:  # Limit to 30
+            try:
+                email_obs_data = {
+                    "observableData": {"type": "email-addr", "value": email},
+                    "x_opencti_score": self.assemblyline_unclassified_score
+                }
+                if self.assemblyline_author:
+                    email_obs_data["createdBy"] = self.assemblyline_author
+
+                email_observable = self.helper.api.stix_cyber_observable.create(**email_obs_data)
+                created_counts['unclassified_emails'] += 1
+
+                # Add label to identify origin
+                self.helper.api.stix_cyber_observable.add_label(
+                    id=email_observable["id"],
+                    label="assemblyline-unverified"
+                )
+
+                # Create 'related-to' relationship to the analyzed file
+                self.helper.api.stix_core_relationship.create(
+                    fromId=observable_id,
+                    toId=email_observable["id"],
+                    relationship_type="related-to",
+                    description="Email address observed during AssemblyLine analysis (not yet verified as malicious)"
+                )
+
+                self.helper.log_info(f"Created unclassified observable for email: {email}")
+            except Exception as e:
+                self.helper.log_warning(f"Could not create unclassified observable for email {email}: {str(e)}")
+
         self.helper.log_info(
             f"Created {created_counts['unclassified_domains']} unclassified domain observables, "
-            f"{created_counts['unclassified_urls']} unclassified URL observables"
+            f"{created_counts['unclassified_urls']} unclassified URL observables, "
+            f"{created_counts['unclassified_emails']} unclassified email observables"
         )
 
         return created_counts
@@ -1838,13 +1877,15 @@ class AssemblyLineConnector:
             if self.assemblyline_create_unclassified_observables:
                 total_unclassified = (
                     unclassified_counts.get('unclassified_domains', 0) +
-                    unclassified_counts.get('unclassified_urls', 0)
+                    unclassified_counts.get('unclassified_urls', 0) +
+                    unclassified_counts.get('unclassified_emails', 0)
                 )
                 if total_unclassified > 0:
                     unclassified_note = (
                         f"\n**Unclassified Observables Created:** {total_unclassified} "
                         f"(domains: {unclassified_counts.get('unclassified_domains', 0)}, "
-                        f"URLs: {unclassified_counts.get('unclassified_urls', 0)}) "
+                        f"URLs: {unclassified_counts.get('unclassified_urls', 0)}, "
+                        f"emails: {unclassified_counts.get('unclassified_emails', 0)}) "
                         f"— low confidence, for passive correlation only"
                     )
 

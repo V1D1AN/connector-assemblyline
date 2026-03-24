@@ -1,6 +1,8 @@
 # OpenCTI AssemblyLine Connector Dependencies
 
-# OpenCTI connector SDK
+# OpenCTI connector SDK (must match your OpenCTI platform version)
+# For OpenCTI 6.x: use pycti 6.x
+# For OpenCTI 7.x: use pycti 7.x
 pycti>=6.0.0,<7.0.0
 
 # AssemblyLine client
