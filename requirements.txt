@@ -1,7 +1,7 @@
 # OpenCTI AssemblyLine Connector Dependencies
 
 # OpenCTI connector SDK
-pycti>=6.0.0
+pycti>=6.0.0,<7.0.0
 
 # AssemblyLine client
 assemblyline-client>=4.0.0
