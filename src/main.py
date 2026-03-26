@@ -876,7 +876,55 @@ class AssemblyLineConnector:
 
         return unclassified_iocs
 
-    def _create_unclassified_observables(self, observable_id: str, unclassified_iocs: Dict) -> Dict:
+    def _find_stixfile_by_hash(self, observable: Dict) -> str:
+        """
+        Find a StixFile in OpenCTI matching the SHA-256 hash of the analyzed artifact.
+        Returns the StixFile ID if found, None otherwise.
+        This allows linking unclassified observables to the persistent StixFile
+        so relationships survive Artifact deletion after 30 days.
+        """
+        try:
+            # Extract SHA-256 from observable hashes
+            sha256 = None
+            hashes = observable.get("hashes", [])
+            for h in hashes:
+                if isinstance(h, dict) and h.get("algorithm") == "SHA-256":
+                    sha256 = h.get("hash")
+                    break
+
+            if not sha256:
+                return None
+
+            # Only search for StixFile if current observable is an Artifact
+            if observable.get("entity_type") != "Artifact":
+                return None
+
+            # Search for a StixFile with the same SHA-256
+            stixfiles = self.helper.api.stix_cyber_observable.list(
+                filters={
+                    "mode": "and",
+                    "filters": [
+                        {"key": "entity_type", "values": ["StixFile"]},
+                        {"key": "hashes.SHA-256", "values": [sha256]}
+                    ],
+                    "filterGroups": []
+                }
+            )
+
+            if stixfiles and len(stixfiles) > 0:
+                stixfile_id = stixfiles[0]["id"]
+                self.helper.log_info(f"Found StixFile {stixfile_id} for SHA-256 {sha256[:16]}...")
+                return stixfile_id
+
+            self.helper.log_info(f"No StixFile found for SHA-256 {sha256[:16]}...")
+            return None
+
+        except Exception as e:
+            self.helper.log_warning(f"Error searching for StixFile: {str(e)}")
+            return None
+
+    def _create_unclassified_observables(self, observable_id: str, unclassified_iocs: Dict,
+                                          stixfile_id: str = None) -> Dict:
         """
         Create simple observables in OpenCTI for unclassified IOCs.
         These are NOT indicators - just observables with low score for passive correlation.
@@ -917,6 +965,18 @@ class AssemblyLineConnector:
                     description="Domain observed during AssemblyLine analysis (not yet verified as malicious)"
                 )
 
+                # Also link to StixFile if available (persists after Artifact deletion)
+                if stixfile_id:
+                    try:
+                        self.helper.api.stix_core_relationship.create(
+                            fromId=stixfile_id,
+                            toId=domain_observable["id"],
+                            relationship_type="related-to",
+                            description="Domain observed during AssemblyLine analysis (not yet verified as malicious)"
+                        )
+                    except Exception:
+                        pass
+
                 self.helper.log_info(f"Created unclassified observable for domain: {domain}")
             except Exception as e:
                 self.helper.log_warning(f"Could not create unclassified observable for domain {domain}: {str(e)}")
@@ -948,6 +1008,18 @@ class AssemblyLineConnector:
                     description="URL observed during AssemblyLine analysis (not yet verified as malicious)"
                 )
 
+                # Also link to StixFile if available (persists after Artifact deletion)
+                if stixfile_id:
+                    try:
+                        self.helper.api.stix_core_relationship.create(
+                            fromId=stixfile_id,
+                            toId=url_observable["id"],
+                            relationship_type="related-to",
+                            description="URL observed during AssemblyLine analysis (not yet verified as malicious)"
+                        )
+                    except Exception:
+                        pass
+
                 self.helper.log_info(f"Created unclassified observable for URL: {url}")
             except Exception as e:
                 self.helper.log_warning(f"Could not create unclassified observable for URL {url}: {str(e)}")
@@ -978,6 +1050,18 @@ class AssemblyLineConnector:
                     relationship_type="related-to",
                     description="Email address observed during AssemblyLine analysis (not yet verified as malicious)"
                 )
+
+                # Also link to StixFile if available (persists after Artifact deletion)
+                if stixfile_id:
+                    try:
+                        self.helper.api.stix_core_relationship.create(
+                            fromId=stixfile_id,
+                            toId=email_observable["id"],
+                            relationship_type="related-to",
+                            description="Email address observed during AssemblyLine analysis (not yet verified as malicious)"
+                        )
+                    except Exception:
+                        pass
 
                 self.helper.log_info(f"Created unclassified observable for email: {email}")
             except Exception as e:
@@ -1739,12 +1823,14 @@ class AssemblyLineConnector:
             created_observables = self._create_relationships(observable["id"], results)
 
             # Create unclassified observables if enabled
-            unclassified_counts = {'unclassified_domains': 0, 'unclassified_urls': 0}
+            unclassified_counts = {'unclassified_domains': 0, 'unclassified_urls': 0, 'unclassified_emails': 0}
             if self.assemblyline_create_unclassified_observables:
                 unclassified_iocs = self._extract_unclassified_iocs(tags, malicious_iocs)
-                if unclassified_iocs['domains'] or unclassified_iocs['urls']:
+                if unclassified_iocs['domains'] or unclassified_iocs['urls'] or unclassified_iocs['emails']:
+                    # Find StixFile for persistent relationship (survives Artifact deletion)
+                    stixfile_id = self._find_stixfile_by_hash(observable)
                     unclassified_counts = self._create_unclassified_observables(
-                        observable["id"], unclassified_iocs
+                        observable["id"], unclassified_iocs, stixfile_id
                     )
 
             # Create Malware Analysis SDO if enabled
