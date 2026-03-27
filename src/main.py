@@ -111,30 +111,6 @@ class AssemblyLineConnector:
             config, False, 20  # Default: low score
         ))
 
-        # Safelist of known legitimate domains to exclude from unclassified IOCs
-        # These are typically CDN, Microsoft, Google infrastructure domains
-        self._safelist_domain_patterns = [
-            # Microsoft infrastructure
-            "microsoft.com", "windowsupdate.com", "windows.net", "msedge.net",
-            "azure.com", "azure.net", "live.com", "office.com", "office365.com",
-            "officeapps.live.com", "sharepoint.com", "onedrive.com", "outlook.com",
-            "microsoftonline.com", "msftconnecttest.com", "msauth.net",
-            # Google infrastructure
-            "google.com", "googleapis.com", "gstatic.com", "googlevideo.com",
-            "googleusercontent.com", "google-analytics.com", "pki.goog",
-            # Certificate / CRL infrastructure
-            "digicert.com", "letsencrypt.org", "verisign.com", "globalsign.com",
-            "symantec.com", "entrust.net", "sectigo.com", "usertrust.com",
-            "ocsp.comodoca.com", "crl.comodoca.com",
-            # CDN / Cloud providers
-            "cloudflare.com", "amazonaws.com", "akamai.net", "akamaized.net",
-            "fastly.net", "edgecastcdn.net", "cloudfront.net",
-            # Mozilla / Firefox
-            "mozilla.org", "mozilla.com", "firefox.com",
-            # Apple
-            "apple.com", "icloud.com", "apple-dns.net",
-        ]
-
         # Sequential mode: wait for AssemblyLine to be idle before submitting
         self.assemblyline_sequential_mode = get_config_variable(
             "ASSEMBLYLINE_SEQUENTIAL_MODE", ["assemblyline", "sequential_mode"],
@@ -778,33 +754,12 @@ class AssemblyLineConnector:
 
         return malicious_iocs
 
-    def _is_safelisted_domain(self, value: str) -> bool:
-        """
-        Check if a domain or URL matches the built-in safelist of known legitimate infrastructure.
-        Matches against domain suffixes to catch subdomains (e.g., self.events.data.microsoft.com).
-        """
-        # Extract domain from URL if needed
-        domain = value.lower()
-        if "://" in domain:
-            try:
-                from urllib.parse import urlparse
-                parsed = urlparse(domain)
-                domain = parsed.hostname or domain
-            except Exception:
-                pass
-
-        # Check against safelist patterns (suffix match for subdomains)
-        for pattern in self._safelist_domain_patterns:
-            if domain == pattern or domain.endswith("." + pattern):
-                return True
-
-        return False
-
     def _extract_unclassified_iocs(self, tags: Dict, malicious_iocs: Dict) -> Dict:
         """
-        Extract IOCs that are NOT classified as malicious/suspicious AND NOT safelisted.
+        Extract IOCs that are NOT classified as malicious/suspicious by AssemblyLine.
         These are domains, URLs and emails observed during analysis that have no verdict yet.
         IPs are deliberately excluded to avoid false positives from version strings.
+        Filtering of legitimate domains is delegated to AssemblyLine safelists and OpenCTI exclusion lists.
 
         Returns a dictionary with 'domains', 'urls' and 'emails' lists (no IPs).
         """
@@ -817,7 +772,7 @@ class AssemblyLineConnector:
         if not tags:
             return unclassified_iocs
 
-        self.helper.log_info("Extracting unclassified IOCs (domains/URLs/emails not tagged malicious or safelisted)...")
+        self.helper.log_info("Extracting unclassified IOCs (domains/URLs/emails not tagged malicious)...")
 
         for main_category, category_data in tags.items():
             if not isinstance(category_data, dict):
@@ -850,11 +805,6 @@ class AssemblyLineConnector:
                     if is_domain and value in malicious_iocs.get('domains', []):
                         continue
                     if is_url and value in malicious_iocs.get('urls', []):
-                        continue
-
-                    # Skip safelisted domains/URLs
-                    if (is_domain or is_url) and self._is_safelisted_domain(value):
-                        self.helper.log_info(f"Skipping safelisted: {value}")
                         continue
 
                     # Add to unclassified
