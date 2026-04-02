@@ -187,6 +187,31 @@ class AssemblyLineConnector:
             self.assemblyline_author = None
             self.assemblyline_identity_standard_id = None
 
+    def _has_verdict_label(self, observable_id: str) -> bool:
+        """
+        Check if an observable already has a verdict label (legitimate or malicious).
+        If so, we should NOT overwrite it with 'assemblyline-unverified'.
+        """
+        try:
+            observable = self.helper.api.stix_cyber_observable.read(id=observable_id)
+            if observable and "objectLabel" in observable:
+                existing_labels = [
+                    lbl["value"].lower()
+                    for lbl in observable["objectLabel"]
+                    if isinstance(lbl, dict) and "value" in lbl
+                ]
+                verdict_labels = {"legitimate", "malicious"}
+                if verdict_labels & set(existing_labels):
+                    self.helper.log_info(
+                        f"Observable {observable_id} already has verdict label "
+                        f"({', '.join(verdict_labels & set(existing_labels))}), "
+                        f"skipping assemblyline-unverified"
+                    )
+                    return True
+        except Exception as e:
+            self.helper.log_warning(f"Could not check labels for {observable_id}: {str(e)}")
+        return False
+
     def _download_import_file(self, file_id: str) -> bytes:
         """
         Download a file from importFiles using OpenCTI REST API
@@ -901,11 +926,12 @@ class AssemblyLineConnector:
                 domain_observable = self.helper.api.stix_cyber_observable.create(**domain_obs_data)
                 created_counts['unclassified_domains'] += 1
 
-                # Add label to identify origin
-                self.helper.api.stix_cyber_observable.add_label(
-                    id=domain_observable["id"],
-                    label="assemblyline-unverified"
-                )
+                # Add label to identify origin (skip if already verdicted)
+                if not self._has_verdict_label(domain_observable["id"]):
+                    self.helper.api.stix_cyber_observable.add_label(
+                        id=domain_observable["id"],
+                        label="assemblyline-unverified"
+                    )
 
                 # Create 'related-to' relationship to the analyzed file
                 self.helper.api.stix_core_relationship.create(
@@ -944,11 +970,12 @@ class AssemblyLineConnector:
                 url_observable = self.helper.api.stix_cyber_observable.create(**url_obs_data)
                 created_counts['unclassified_urls'] += 1
 
-                # Add label to identify origin
-                self.helper.api.stix_cyber_observable.add_label(
-                    id=url_observable["id"],
-                    label="assemblyline-unverified"
-                )
+                # Add label to identify origin (skip if already verdicted)
+                if not self._has_verdict_label(url_observable["id"]):
+                    self.helper.api.stix_cyber_observable.add_label(
+                        id=url_observable["id"],
+                        label="assemblyline-unverified"
+                    )
 
                 # Create 'related-to' relationship to the analyzed file
                 self.helper.api.stix_core_relationship.create(
@@ -987,11 +1014,12 @@ class AssemblyLineConnector:
                 email_observable = self.helper.api.stix_cyber_observable.create(**email_obs_data)
                 created_counts['unclassified_emails'] += 1
 
-                # Add label to identify origin
-                self.helper.api.stix_cyber_observable.add_label(
-                    id=email_observable["id"],
-                    label="assemblyline-unverified"
-                )
+                # Add label to identify origin (skip if already verdicted)
+                if not self._has_verdict_label(email_observable["id"]):
+                    self.helper.api.stix_cyber_observable.add_label(
+                        id=email_observable["id"],
+                        label="assemblyline-unverified"
+                    )
 
                 # Create 'related-to' relationship to the analyzed file
                 self.helper.api.stix_core_relationship.create(
