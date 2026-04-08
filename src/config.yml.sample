@@ -41,6 +41,7 @@ assemblyline:
   # IPs are excluded to avoid false positives from version strings
   create_unclassified_observables: false  # Disabled by default
   unclassified_score: 20  # Low score for unclassified observables (0-100)
+  exclude_safelisted: true  # Exclude tags marked as safelisted by AL4 from import
   
   # Sequential mode (prevents AssemblyLine overload)
   sequential_mode: true  # Wait for AL to be idle before submitting

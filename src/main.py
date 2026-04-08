@@ -111,6 +111,15 @@ class AssemblyLineConnector:
             config, False, 20  # Default: low score
         ))
 
+        # Exclude safelisted tags from import (tags marked as safelisted by AL4)
+        self.exclude_safelisted = get_config_variable(
+            "ASSEMBLYLINE_EXCLUDE_SAFELISTED",
+            ["assemblyline", "exclude_safelisted"],
+            config, True, True
+        )
+        if isinstance(self.exclude_safelisted, str):
+            self.exclude_safelisted = self.exclude_safelisted.lower() in ('true', '1', 'yes')
+
         # Sequential mode: wait for AssemblyLine to be idle before submitting
         self.assemblyline_sequential_mode = get_config_variable(
             "ASSEMBLYLINE_SEQUENTIAL_MODE", ["assemblyline", "sequential_mode"],
@@ -186,31 +195,6 @@ class AssemblyLineConnector:
             self.helper.log_warning(f"Could not create/find AssemblyLine identity: {str(e)}")
             self.assemblyline_author = None
             self.assemblyline_identity_standard_id = None
-
-    def _has_verdict_label(self, observable_id: str) -> bool:
-        """
-        Check if an observable already has a verdict label (legitimate or malicious).
-        If so, we should NOT overwrite it with 'assemblyline-unverified'.
-        """
-        try:
-            observable = self.helper.api.stix_cyber_observable.read(id=observable_id)
-            if observable and "objectLabel" in observable:
-                existing_labels = [
-                    lbl["value"].lower()
-                    for lbl in observable["objectLabel"]
-                    if isinstance(lbl, dict) and "value" in lbl
-                ]
-                verdict_labels = {"legitimate", "malicious"}
-                if verdict_labels & set(existing_labels):
-                    self.helper.log_info(
-                        f"Observable {observable_id} already has verdict label "
-                        f"({', '.join(verdict_labels & set(existing_labels))}), "
-                        f"skipping assemblyline-unverified"
-                    )
-                    return True
-        except Exception as e:
-            self.helper.log_warning(f"Could not check labels for {observable_id}: {str(e)}")
-        return False
 
     def _download_import_file(self, file_id: str) -> bytes:
         """
@@ -725,6 +709,15 @@ class AssemblyLineConnector:
 
                     value = tag_entry[0]
                     classification = tag_entry[1]
+                    # AL4 submission summary returns: [value, verdict, is_safelisted, classification_level]
+                    is_safelisted = tag_entry[2] if len(tag_entry) > 2 else False
+
+                    # Skip safelisted tags if configured
+                    if self.exclude_safelisted and is_safelisted:
+                        self.helper.log_debug(
+                            f"Skipping safelisted tag: {tag_type}={value}"
+                        )
+                        continue
 
                     # Determine which classifications to include
                     should_include = False
@@ -813,9 +806,18 @@ class AssemblyLineConnector:
 
                     value = tag_entry[0]
                     classification = tag_entry[1]
+                    # AL4 submission summary returns: [value, verdict, is_safelisted, classification_level]
+                    is_safelisted = tag_entry[2] if len(tag_entry) > 2 else False
 
                     # Skip malicious and suspicious - already handled
                     if classification in ["malicious", "suspicious"]:
+                        continue
+
+                    # Skip safelisted tags if configured
+                    if self.exclude_safelisted and is_safelisted:
+                        self.helper.log_debug(
+                            f"Skipping safelisted unclassified tag: {tag_type}={value}"
+                        )
                         continue
 
                     # Detect type from tag_type
@@ -926,12 +928,11 @@ class AssemblyLineConnector:
                 domain_observable = self.helper.api.stix_cyber_observable.create(**domain_obs_data)
                 created_counts['unclassified_domains'] += 1
 
-                # Add label to identify origin (skip if already verdicted)
-                if not self._has_verdict_label(domain_observable["id"]):
-                    self.helper.api.stix_cyber_observable.add_label(
-                        id=domain_observable["id"],
-                        label="assemblyline-unverified"
-                    )
+                # Add label to identify origin
+                self.helper.api.stix_cyber_observable.add_label(
+                    id=domain_observable["id"],
+                    label="assemblyline-unverified"
+                )
 
                 # Create 'related-to' relationship to the analyzed file
                 self.helper.api.stix_core_relationship.create(
@@ -970,12 +971,11 @@ class AssemblyLineConnector:
                 url_observable = self.helper.api.stix_cyber_observable.create(**url_obs_data)
                 created_counts['unclassified_urls'] += 1
 
-                # Add label to identify origin (skip if already verdicted)
-                if not self._has_verdict_label(url_observable["id"]):
-                    self.helper.api.stix_cyber_observable.add_label(
-                        id=url_observable["id"],
-                        label="assemblyline-unverified"
-                    )
+                # Add label to identify origin
+                self.helper.api.stix_cyber_observable.add_label(
+                    id=url_observable["id"],
+                    label="assemblyline-unverified"
+                )
 
                 # Create 'related-to' relationship to the analyzed file
                 self.helper.api.stix_core_relationship.create(
@@ -1014,12 +1014,11 @@ class AssemblyLineConnector:
                 email_observable = self.helper.api.stix_cyber_observable.create(**email_obs_data)
                 created_counts['unclassified_emails'] += 1
 
-                # Add label to identify origin (skip if already verdicted)
-                if not self._has_verdict_label(email_observable["id"]):
-                    self.helper.api.stix_cyber_observable.add_label(
-                        id=email_observable["id"],
-                        label="assemblyline-unverified"
-                    )
+                # Add label to identify origin
+                self.helper.api.stix_cyber_observable.add_label(
+                    id=email_observable["id"],
+                    label="assemblyline-unverified"
+                )
 
                 # Create 'related-to' relationship to the analyzed file
                 self.helper.api.stix_core_relationship.create(
