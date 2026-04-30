@@ -46,3 +46,9 @@ assemblyline:
   # Sequential mode (prevents AssemblyLine overload)
   sequential_mode: true  # Wait for AL to be idle before submitting
   poll_interval: 30  # Seconds between checks when AL is busy
+
+  # Default TLP marking applied to ALL OpenCTI objects created by this connector
+  # (indicators, observables, malware, attack-patterns, notes, relationships, malware-analysis).
+  # Accepted: TLP:CLEAR, TLP:GREEN, TLP:AMBER, TLP:AMBER+STRICT, TLP:RED, or '' to disable.
+  # NOTE: distinct from the AL4 submission `classification` (ASSEMBLYLINE_CLASSIFICATION).
+  default_marking: 'TLP:AMBER'

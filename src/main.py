@@ -159,6 +159,185 @@ class AssemblyLineConnector:
         self.assemblyline_identity_standard_id = None
         self._get_assemblyline_identity()
 
+        # Default TLP marking applied to every object produced by this connector.
+        # Accepted values: TLP:CLEAR / TLP:WHITE / TLP:GREEN / TLP:AMBER /
+        # TLP:AMBER+STRICT / TLP:RED, or empty/None to disable.
+        # NOTE: This is the OpenCTI marking, distinct from ASSEMBLYLINE_CLASSIFICATION
+        # which is the AL4 submission classification level (e.g. "TLP:C").
+        default_marking_raw = get_config_variable(
+            "ASSEMBLYLINE_DEFAULT_MARKING",
+            ["assemblyline", "default_marking"],
+            config, False, "TLP:AMBER"
+        )
+        self.default_marking_id = self._resolve_marking_id(default_marking_raw)
+        self.default_marking_stix2 = self._stix2_marking_object(self.default_marking_id)
+
+        # Auto-inject the default marking into all helper.api.X.create() calls.
+        # This covers the many entity-creation paths in this connector without
+        # requiring per-call modifications.
+        self._wrap_api_create_methods()
+
+    def _wrap_api_create_methods(self):
+        """Wrap helper.api.X.create methods to auto-inject objectMarking.
+
+        Targets the entity types this connector creates: indicator, malware,
+        attack_pattern, note, stix_cyber_observable, stix_core_relationship,
+        and identity. The wrapper is a no-op if default_marking_id is None.
+        """
+        if not self.default_marking_id:
+            return
+        targets = [
+            "indicator", "malware", "attack_pattern", "note",
+            "stix_cyber_observable", "stix_core_relationship",
+        ]
+        marking_id = self.default_marking_id
+
+        for attr in targets:
+            try:
+                module = getattr(self.helper.api, attr, None)
+                if module is None or not hasattr(module, "create"):
+                    continue
+                original = module.create
+
+                def make_wrapper(orig):
+                    def wrapped(*args, **kwargs):
+                        existing = kwargs.get("objectMarking") or []
+                        if marking_id not in existing:
+                            kwargs["objectMarking"] = list(existing) + [marking_id]
+                        return orig(*args, **kwargs)
+                    return wrapped
+
+                module.create = make_wrapper(original)
+                self.helper.log_info(f"Auto-marking enabled for helper.api.{attr}.create")
+            except Exception as e:
+                self.helper.log_warning(f"Could not wrap helper.api.{attr}.create: {e}")
+
+    # ─── Marking helpers ──────────────────────────────────────────────
+
+    _TLP_STIX_IDS = {
+        "TLP:CLEAR": "marking-definition--94868c89-83c2-464b-929b-a1a8aa3c8487",
+        "TLP:WHITE": "marking-definition--613f2e26-407d-48c7-9eca-b8e91df99dc9",
+        "TLP:GREEN": "marking-definition--34098fce-860f-48ae-8e50-ebd3cc5e41da",
+        "TLP:AMBER": "marking-definition--f88d31f6-486f-44da-b317-01333bde0b82",
+    }
+
+    def _resolve_marking_id(self, value):
+        """Resolve a TLP string into a STIX marking-definition ID.
+
+        Standard TLP levels (CLEAR/WHITE/GREEN/AMBER) use OASIS STIX 2.1 IDs.
+        AMBER+STRICT and RED (OpenCTI extensions) are resolved via the OpenCTI API.
+        Returns None if marking is disabled or unresolvable.
+        """
+        if not value:
+            return None
+        v = str(value).strip().upper()
+        if v in ("", "NONE", "FALSE"):
+            return None
+        if v in ("CLEAR", "WHITE", "GREEN", "AMBER", "RED"):
+            v = f"TLP:{v}"
+        if v == "AMBER+STRICT":
+            v = "TLP:AMBER+STRICT"
+
+        if v in self._TLP_STIX_IDS:
+            self.helper.log_info(f"Default marking set to {v}")
+            return self._TLP_STIX_IDS[v]
+
+        # AMBER+STRICT / RED → resolve via OpenCTI API
+        try:
+            definition = v.split(":", 1)[1] if ":" in v else v
+            marking = self.helper.api.marking_definition.read(
+                filters={
+                    "mode": "and",
+                    "filters": [
+                        {"key": "definition_type", "values": ["TLP"]},
+                        {"key": "definition", "values": [definition]},
+                    ],
+                    "filterGroups": [],
+                }
+            )
+            if marking and marking.get("standard_id"):
+                self.helper.log_info(f"Default marking resolved via API: {v} → {marking['standard_id']}")
+                return marking["standard_id"]
+            self.helper.log_warning(f"Could not resolve marking '{v}' — default marking disabled")
+            return None
+        except Exception as e:
+            self.helper.log_warning(f"Error resolving marking '{v}': {e} — default marking disabled")
+            return None
+
+    def _stix2_marking_object(self, marking_id):
+        """Return a stix2 MarkingDefinition object usable in stix2.X(object_marking_refs=[...]).
+
+        For known TLP levels, return the corresponding stix2.TLP_* constant.
+        For OpenCTI custom markings (AMBER+STRICT/RED), return the bare ID string —
+        stix2 accepts string refs in object_marking_refs.
+        """
+        if not marking_id:
+            return None
+        import stix2  # lazy import — module-level import not used in this file
+        mapping = {
+            self._TLP_STIX_IDS["TLP:CLEAR"]: stix2.TLP_WHITE,  # CLEAR ≈ WHITE in stix2 lib
+            self._TLP_STIX_IDS["TLP:WHITE"]: stix2.TLP_WHITE,
+            self._TLP_STIX_IDS["TLP:GREEN"]: stix2.TLP_GREEN,
+            self._TLP_STIX_IDS["TLP:AMBER"]: stix2.TLP_AMBER,
+        }
+        if marking_id in mapping:
+            return mapping[marking_id]
+        # Fallback: pass the bare ID string (stix2 accepts string refs)
+        return marking_id
+
+    def _with_marking(self, data):
+        """Inject objectMarking into an OpenCTI api.X.create(**data) payload.
+
+        Adds without overwriting if already set, deduplicates.
+        Returns the same dict (mutated) for chaining convenience.
+        """
+        if self.default_marking_id and isinstance(data, dict):
+            existing = data.get("objectMarking") or []
+            if self.default_marking_id not in existing:
+                data["objectMarking"] = list(existing) + [self.default_marking_id]
+        return data
+
+    # SDO/SRO/SCO types that accept object_marking_refs (per STIX 2.1 spec).
+    _MARKABLE_TYPES = {
+        "attack-pattern", "campaign", "course-of-action", "grouping",
+        "identity", "incident", "indicator", "infrastructure", "intrusion-set",
+        "location", "malware", "malware-analysis", "note", "observed-data",
+        "opinion", "report", "threat-actor", "tool", "vulnerability",
+        "relationship", "sighting",
+        "ipv4-addr", "ipv6-addr", "domain-name", "url", "file", "email-addr",
+        "email-message", "mac-addr", "autonomous-system", "directory",
+        "network-traffic", "process", "software", "user-account",
+        "windows-registry-key", "x509-certificate", "artifact",
+    }
+
+    def _mark_serialized_bundle(self, serialized_bundle):
+        """Inject default_marking_id into every markable object of a serialized STIX bundle.
+
+        Accepts a JSON string (typical output of helper.stix2_create_bundle) and returns
+        a JSON string with object_marking_refs populated. No-op if marking is disabled.
+        """
+        if not self.default_marking_id:
+            return serialized_bundle
+        try:
+            bundle = json.loads(serialized_bundle) if isinstance(serialized_bundle, str) else serialized_bundle
+            if not isinstance(bundle, dict) or bundle.get("type") != "bundle":
+                return serialized_bundle
+            objects = bundle.get("objects", [])
+            marked = 0
+            for obj in objects:
+                if obj.get("type") not in self._MARKABLE_TYPES:
+                    continue
+                refs = obj.get("object_marking_refs") or []
+                if self.default_marking_id not in refs:
+                    obj["object_marking_refs"] = list(refs) + [self.default_marking_id]
+                    marked += 1
+            if marked:
+                self.helper.log_info(f"Applied default marking to {marked} bundle objects")
+            return json.dumps(bundle)
+        except Exception as e:
+            self.helper.log_warning(f"Could not mark serialized bundle: {e}")
+            return serialized_bundle
+
     def _get_assemblyline_identity(self):
         """
         Get or create the AssemblyLine identity for author attribution
@@ -1268,7 +1447,7 @@ class AssemblyLineConnector:
                 try:
                     domain_stix = stix2.DomainName(
                         value=domain,
-                        object_marking_refs=[stix2.TLP_WHITE],
+                        object_marking_refs=[self.default_marking_stix2] if self.default_marking_stix2 else [],
                         custom_properties={
                             "created_by_ref": self.assemblyline_identity_standard_id,
                         },
@@ -1289,7 +1468,7 @@ class AssemblyLineConnector:
                     if ':' in ip:
                         ip_stix = stix2.IPv6Address(
                             value=ip,
-                            object_marking_refs=[stix2.TLP_WHITE],
+                            object_marking_refs=[self.default_marking_stix2] if self.default_marking_stix2 else [],
                             custom_properties={
                                 "created_by_ref": self.assemblyline_identity_standard_id,
                             },
@@ -1297,7 +1476,7 @@ class AssemblyLineConnector:
                     else:
                         ip_stix = stix2.IPv4Address(
                             value=ip,
-                            object_marking_refs=[stix2.TLP_WHITE],
+                            object_marking_refs=[self.default_marking_stix2] if self.default_marking_stix2 else [],
                             custom_properties={
                                 "created_by_ref": self.assemblyline_identity_standard_id,
                             },
@@ -1313,7 +1492,7 @@ class AssemblyLineConnector:
                 try:
                     url_stix = stix2.URL(
                         value=url,
-                        object_marking_refs=[stix2.TLP_WHITE],
+                        object_marking_refs=[self.default_marking_stix2] if self.default_marking_stix2 else [],
                         custom_properties={
                             "created_by_ref": self.assemblyline_identity_standard_id,
                         },
@@ -1340,6 +1519,7 @@ class AssemblyLineConnector:
                 created_by_ref=self.assemblyline_identity_standard_id,
                 analysis_sco_refs=analysis_sco_refs if analysis_sco_refs else None,
                 external_references=[external_reference],
+                object_marking_refs=[self.default_marking_stix2] if self.default_marking_stix2 else [],
             )
 
             # Add malware analysis to the bundle
@@ -1349,6 +1529,8 @@ class AssemblyLineConnector:
 
             # Create bundle and send
             serialized_bundle = self.helper.stix2_create_bundle(stix_objects)
+            # Defensive: ensure the marking ref is present on every markable object in the bundle
+            serialized_bundle = self._mark_serialized_bundle(serialized_bundle)
             self.helper.send_stix2_bundle(serialized_bundle)
 
             self.helper.log_info(f"Sent Malware Analysis bundle with {len(stix_objects)} objects to OpenCTI")
